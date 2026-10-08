@@ -15,10 +15,12 @@ def register_user(user: UserCreate, db: Session = Depends(get_db)):
     
     hashed_pwd = get_password_hash(user.password)
     new_user = User(
-        full_name=user.full_name,
-        email=user.email,
-        hashed_password=hashed_pwd,
-        role=user.role
+    full_name=user.full_name,
+    email=user.email,
+    hashed_password=hashed_pwd,
+    role=user.role,
+    is_active=True
+
     )
     db.add(new_user)
     db.commit()
@@ -39,9 +41,19 @@ def login_user(credentials: UserLogin, db: Session = Depends(get_db)):
     return {"access_token": access_token, "token_type": "bearer"}
 
 
-from app.auth import get_current_user
+from app.auth import (
+    get_password_hash,
+    verify_password,
+    create_access_token,
+    require_role
+)
 
-@router.get("/me", response_model=UserResponse)
-def get_me(current_user: User = Depends(get_current_user)):
-    return current_user
+@router.get("/admin-test")
+def admin_test(
+    current_user: User = Depends(require_role("ADMIN"))
+):
+    return {
+        "message": "Welcome Admin!",
+        "user": current_user.full_name
+    }
 
