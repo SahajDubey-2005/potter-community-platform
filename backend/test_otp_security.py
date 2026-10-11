@@ -1,8 +1,18 @@
+import uuid
 from datetime import datetime, timedelta, timezone
 
+from fastapi.testclient import TestClient
+
 from app.database import SessionLocal
-from app.models import PhoneOTP
-from app.otp_service import generate_otp, save_otp, verify_otp
+from app.main import app
+from app.models import PhoneOTP, User
+from app.otp_service import (
+    generate_otp,
+    save_otp,
+    verify_otp,
+)
+
+client = TestClient(app)
 
 
 def test_otp_rejects_after_five_incorrect_attempts():
@@ -19,6 +29,7 @@ def test_otp_rejects_after_five_incorrect_attempts():
             db.refresh(record)
             assert record.attempts == 5
             assert record.is_used is True
+
         finally:
             db.query(PhoneOTP).filter(
                 PhoneOTP.phone_number == phone
@@ -43,6 +54,7 @@ def test_expired_otp_is_rejected():
 
             db.refresh(record)
             assert record.is_used is True
+
         finally:
             db.query(PhoneOTP).filter(
                 PhoneOTP.phone_number == phone
@@ -60,6 +72,7 @@ def test_otp_can_only_be_used_once():
 
             assert verify_otp(db, phone, otp) is True
             assert verify_otp(db, phone, otp) is False
+
         finally:
             db.query(PhoneOTP).filter(
                 PhoneOTP.phone_number == phone
@@ -83,8 +96,10 @@ def test_new_otp_invalidates_previous_otp():
 
             assert old_record.is_used is True
             assert new_record.is_used is False
+
             assert verify_otp(db, phone, old_otp) is False
             assert verify_otp(db, phone, new_otp) is True
+
         finally:
             db.query(PhoneOTP).filter(
                 PhoneOTP.phone_number == phone
@@ -102,8 +117,60 @@ def test_otp_hash_is_not_stored_as_plaintext():
 
             assert record.otp_hash != otp
             assert len(record.otp_hash) == 64
+
         finally:
             db.query(PhoneOTP).filter(
                 PhoneOTP.phone_number == phone
             ).delete()
+            db.commit()
+
+
+def test_request_otp_cooldown():
+    # Generate unique credentials so repeated test runs
+    # do not fail because of duplicate registration.
+    unique_id = uuid.uuid4().hex
+    phone = f"987{uuid.uuid4().int % 10**7:07d}"
+    email = f"cooldown-{unique_id}@example.com"
+
+    try:
+        # Register a fresh, unverified user.
+        register_response = client.post(
+            "/auth/register",
+            json={
+                "full_name": "Cooldown Test User",
+                "phone_number": phone,
+                "email": email,
+                "password": "TestPass@123",
+            },
+        )
+
+        assert register_response.status_code == 201
+
+        # First OTP request should succeed.
+        first_response = client.post(
+            "/auth/request-otp",
+            json={"phone_number": phone},
+        )
+
+        assert first_response.status_code == 200
+
+        # Immediate second request should be rate-limited.
+        second_response = client.post(
+            "/auth/request-otp",
+            json={"phone_number": phone},
+        )
+
+        assert second_response.status_code == 429
+
+    finally:
+        # Remove OTP records and the temporary test user.
+        with SessionLocal() as db:
+            db.query(PhoneOTP).filter(
+                PhoneOTP.phone_number == phone
+            ).delete()
+
+            db.query(User).filter(
+                User.phone_number == phone
+            ).delete()
+
             db.commit()

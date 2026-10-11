@@ -1,8 +1,10 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import User
+from app.models import User, PhoneOTP
 from app.otp_service import generate_otp, save_otp, verify_otp
 from app.schemas import (
     UserCreate,
@@ -48,6 +50,38 @@ def request_otp(
             "message": "Phone number is already verified"
         }
 
+    # Check when the latest OTP was requested.
+    latest_otp = (
+        db.query(PhoneOTP)
+        .filter(PhoneOTP.phone_number == request.phone_number)
+        .order_by(
+            PhoneOTP.created_at.desc(),
+            PhoneOTP.id.desc(),
+        )
+        .first()
+    )
+
+    # Enforce a 60-second cooldown.
+    if latest_otp:
+        created_at = latest_otp.created_at
+
+        # SQLite may return a timezone-naive datetime.
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+
+        elapsed = (
+            datetime.now(timezone.utc) - created_at
+        ).total_seconds()
+
+        if elapsed < 60:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=(
+                    "Please wait 60 seconds before "
+                    "requesting another OTP"
+                ),
+            )
+
     otp = generate_otp()
 
     save_otp(
@@ -56,7 +90,7 @@ def request_otp(
         otp=otp,
     )
 
-    # SMS provider is not integrated yet.
+    # SMS delivery is not configured yet.
     # Never return the original OTP in this API response.
     return {
         "message": (
@@ -106,6 +140,7 @@ def verify_phone_otp(
         )
 
     user.phone_verified = True
+
     db.commit()
     db.refresh(user)
 
@@ -210,6 +245,13 @@ def login_user(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is inactive",
+        )
+
+    # Require phone verification before login.
+    if not user.phone_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please verify your phone number before logging in",
         )
 
     access_token = create_access_token(
