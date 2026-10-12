@@ -1,17 +1,48 @@
+import os
+import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
-from app.database import SessionLocal
+from app.database import Base, get_db
 from app.main import app
 from app.models import PhoneOTP, User
-from app.otp_service import (
-    generate_otp,
-    save_otp,
-    verify_otp,
+from app.otp_service import generate_otp, save_otp, verify_otp
+
+
+_test_db_file = tempfile.NamedTemporaryFile(
+    suffix=".db", delete=False
+)
+_test_db_file.close()
+
+TEST_DATABASE_URL = f"sqlite:///{_test_db_file.name}"
+
+test_engine = create_engine(
+    TEST_DATABASE_URL,
+    connect_args={"check_same_thread": False},
 )
 
+TestingSessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=test_engine,
+)
+
+def override_get_db():
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+app.dependency_overrides[get_db] = override_get_db
+Base.metadata.create_all(bind=test_engine)
+
+SessionLocal = TestingSessionLocal
 client = TestClient(app)
 
 
@@ -273,6 +304,7 @@ def test_citizen_cannot_access_admin_endpoint():
             user = db.query(User).filter(
                 User.phone_number == phone
             ).first()
+            assert user is not None, "Registered user was not found"
             user.phone_verified = True
             db.commit()
 
@@ -300,3 +332,15 @@ def test_citizen_cannot_access_admin_endpoint():
                 User.phone_number == phone
             ).delete()
             db.commit()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def cleanup_test_database():
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        client.close()
+        test_engine.dispose()
+        if os.path.exists(_test_db_file.name):
+            os.remove(_test_db_file.name)
