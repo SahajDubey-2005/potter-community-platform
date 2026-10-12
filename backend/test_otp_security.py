@@ -174,3 +174,129 @@ def test_request_otp_cooldown():
             ).delete()
 
             db.commit()
+
+
+def test_unverified_user_cannot_login():
+    unique_id = uuid.uuid4().hex
+    phone = f"987{uuid.uuid4().int % 10**7:07d}"
+    email = f"unverified-{unique_id}@example.com"
+
+    try:
+        response = client.post(
+            "/auth/register",
+            json={
+                "full_name": "Unverified Test User",
+                "phone_number": phone,
+                "email": email,
+                "password": "TestPass@123",
+            },
+        )
+        assert response.status_code == 201
+
+        response = client.post(
+            "/auth/login",
+            json={
+                "identifier": email,
+                "password": "TestPass@123",
+            },
+        )
+
+        assert response.status_code == 403
+        assert "verify your phone" in response.json()["detail"].lower()
+
+    finally:
+        with SessionLocal() as db:
+            db.query(PhoneOTP).filter(
+                PhoneOTP.phone_number == phone
+            ).delete()
+            db.query(User).filter(
+                User.phone_number == phone
+            ).delete()
+            db.commit()
+
+
+def test_login_rejects_wrong_password():
+    unique_id = uuid.uuid4().hex
+    phone = f"987{uuid.uuid4().int % 10**7:07d}"
+    email = f"wrong-password-{unique_id}@example.com"
+
+    try:
+        response = client.post(
+            "/auth/register",
+            json={
+                "full_name": "Password Test User",
+                "phone_number": phone,
+                "email": email,
+                "password": "TestPass@123",
+            },
+        )
+        assert response.status_code == 201
+
+        response = client.post(
+            "/auth/login",
+            json={
+                "identifier": email,
+                "password": "WrongPass@123",
+            },
+        )
+
+        assert response.status_code == 401
+
+    finally:
+        with SessionLocal() as db:
+            db.query(User).filter(
+                User.phone_number == phone
+            ).delete()
+            db.commit()
+
+
+def test_citizen_cannot_access_admin_endpoint():
+    unique_id = uuid.uuid4().hex
+    phone = f"987{uuid.uuid4().int % 10**7:07d}"
+    email = f"citizen-admin-test-{unique_id}@example.com"
+
+    try:
+        # Register a new CITIZEN account.
+        response = client.post(
+            "/auth/register",
+            json={
+                "full_name": "Citizen Test User",
+                "phone_number": phone,
+                "email": email,
+                "password": "TestPass@123",
+            },
+        )
+        assert response.status_code == 201
+
+        # Verify phone number directly for this authorization test.
+        with SessionLocal() as db:
+            user = db.query(User).filter(
+                User.phone_number == phone
+            ).first()
+            user.phone_verified = True
+            db.commit()
+
+        # Log in and obtain a token.
+        response = client.post(
+            "/auth/login",
+            json={
+                "identifier": email,
+                "password": "TestPass@123",
+            },
+        )
+        assert response.status_code == 200
+        token = response.json()["access_token"]
+
+        # A CITIZEN must not access an ADMIN-only endpoint.
+        response = client.get(
+            "/auth/admin-test",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 403
+
+    finally:
+        with SessionLocal() as db:
+            db.query(User).filter(
+                User.phone_number == phone
+            ).delete()
+            db.commit()
