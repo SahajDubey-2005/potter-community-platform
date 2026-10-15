@@ -45,6 +45,19 @@ import {
   TrendingUp,
 } from "lucide-react";
 
+// Authentication endpoints must be implemented by your secure backend.
+const AUTH_API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://localhost:5000").replace(/\/$/, "");
+
+async function authApi(path, options = {}) {
+  const response = await fetch(`${AUTH_API_BASE}${path}`, {
+    ...options,
+    headers: { ...(options.body instanceof FormData ? {} : { "Content-Type": "application/json" }), ...(options.headers || {}) },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.message || payload.error || "Request failed. Please try again.");
+  return payload;
+}
+
 /* =========================================================
    PUBLIC FEATURES
 ========================================================= */
@@ -355,9 +368,115 @@ const matrimonialProfiles = [];
    APP
 ========================================================= */
 
+const ROLE_DASHBOARD_CONFIG = {
+  "General Member": {
+    title: "Member Dashboard",
+    description: "Your membership, community services, and updates in one place.",
+    actions: [{ label: "My Profile", page: "profile" }, { label: "Documents", page: "documents" }, { label: "Scholarships", page: "scholarships" }, { label: "Marketplace", page: "marketplace" }],
+  },
+  "Marketplace Seller": {
+    title: "Seller Dashboard",
+    description: "Manage your pottery listings and connect with customers.",
+    actions: [{ label: "Marketplace", page: "marketplace" }, { label: "My Profile", page: "profile" }, { label: "Events", page: "events" }, { label: "Payments & Fees", page: "payments" }],
+  },
+  "Super Admin": {
+    title: "Super Admin Dashboard",
+    description: "Community-wide oversight and administration.",
+    actions: [{ label: "Members", page: "members" }, { label: "Payments & Fees", page: "payments" }, { label: "Events", page: "events" }, { label: "Announcements", page: "announcements" }],
+  },
+  "Admin": {
+    title: "Admin Dashboard",
+    description: "Manage community operations and member services.",
+    actions: [{ label: "Members", page: "members" }, { label: "Announcements", page: "announcements" }, { label: "Events", page: "events" }, { label: "Documents", page: "documents" }],
+  },
+  "President / Head": {
+    title: "President Dashboard",
+    description: "Oversee community activities, leadership, and key updates.",
+    actions: [{ label: "Members", page: "members" }, { label: "Events", page: "events" }, { label: "Announcements", page: "announcements" }, { label: "Payments & Fees", page: "payments" }],
+  },
+  "Secretary": {
+    title: "Secretary Dashboard",
+    description: "Coordinate records, announcements, and community events.",
+    actions: [{ label: "Documents", page: "documents" }, { label: "Announcements", page: "announcements" }, { label: "Events", page: "events" }, { label: "Members", page: "members" }],
+  },
+  "Treasurer": {
+    title: "Treasurer Dashboard",
+    description: "Review membership fees and community financial activity.",
+    actions: [{ label: "Payments & Fees", page: "payments" }, { label: "Members", page: "members" }, { label: "Events", page: "events" }, { label: "My Profile", page: "profile" }],
+  },
+  "Director": {
+    title: "Director Dashboard",
+    description: "Review community performance and coordinate assigned responsibilities.",
+    actions: [{ label: "Members", page: "members" }, { label: "Events", page: "events" }, { label: "Announcements", page: "announcements" }, { label: "Scholarships", page: "scholarships" }],
+  },
+  "Nominated Director": {
+    title: "Nominated Director Dashboard",
+    description: "Access community updates and your assigned coordination tools.",
+    actions: [{ label: "Members", page: "members" }, { label: "Events", page: "events" }, { label: "Announcements", page: "announcements" }, { label: "My Profile", page: "profile" }],
+  },
+  "Scholarship Officer": {
+    title: "Scholarship Officer Dashboard",
+    description: "Focus on scholarship information and applicant support.",
+    actions: [{ label: "Scholarships", page: "scholarships" }, { label: "Documents", page: "documents" }, { label: "Members", page: "members" }, { label: "Announcements", page: "announcements" }],
+  },
+  "Matrimonial Coordinator": {
+    title: "Matrimonial Coordinator Dashboard",
+    description: "Coordinate matrimonial services and community requests.",
+    actions: [{ label: "Matrimonial", page: "matrimonial" }, { label: "Members", page: "members" }, { label: "Announcements", page: "announcements" }, { label: "My Profile", page: "profile" }],
+  },
+  "Event Coordinator": {
+    title: "Event Coordinator Dashboard",
+    description: "Plan events, track registrations, and share community updates.",
+    actions: [{ label: "Events", page: "events" }, { label: "Announcements", page: "announcements" }, { label: "Members", page: "members" }, { label: "My Profile", page: "profile" }],
+  },
+  "Verification Officer": {
+    title: "Verification Officer Dashboard",
+    description: "Review membership records and document verification tasks.",
+    actions: [{ label: "Members", page: "members" }, { label: "Documents", page: "documents" }, { label: "My Profile", page: "profile" }, { label: "Announcements", page: "announcements" }],
+  },
+  "Media Coordinator": {
+    title: "Media Coordinator Dashboard",
+    description: "Coordinate announcements and community communication.",
+    actions: [{ label: "Announcements", page: "announcements" }, { label: "Events", page: "events" }, { label: "Marketplace", page: "marketplace" }, { label: "My Profile", page: "profile" }],
+  },
+  "Legal Grievance Coordinator": {
+    title: "Legal & Grievance Dashboard",
+    description: "Coordinate community support requests and grievance follow-up.",
+    actions: [{ label: "Emergency Support", page: "emergency" }, { label: "Documents", page: "documents" }, { label: "Members", page: "members" }, { label: "My Profile", page: "profile" }],
+  },
+};
+
+function normalizeCommunityRole(role) {
+  const value = String(role || "").trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+  const aliases = {
+    "normal member": "General Member",
+    "general member": "General Member",
+    "member": "General Member",
+    "president": "President / Head",
+    "president/head": "President / Head",
+    "president / head": "President / Head",
+    "head": "President / Head",
+    "superadmin": "Super Admin",
+    "committee member": "Director",
+    "marketplace seller": "Marketplace Seller",
+    "scholarship officer": "Scholarship Officer",
+    "matrimonial coordinator": "Matrimonial Coordinator",
+    "event coordinator": "Event Coordinator",
+    "verification officer": "Verification Officer",
+    "media coordinator": "Media Coordinator",
+    "legal grievance coordinator": "Legal Grievance Coordinator",
+    "legal & grievance coordinator": "Legal Grievance Coordinator",
+  };
+  return aliases[value] || Object.keys(ROLE_DASHBOARD_CONFIG).find((name) => name.toLowerCase() === value) || "General Member";
+}
+
 function App() {
   const [authenticated, setAuthenticated] = useState(false);
   const [activeRole, setActiveRole] = useState("General Member");
+  const [activeUser, setActiveUser] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem("potterCommunityUser") || "null"); }
+    catch { return null; }
+  });
   const [authModal, setAuthModal] = useState(null);
   const [verificationPending, setVerificationPending] =
     useState(false);
@@ -392,6 +511,11 @@ function App() {
   };
 
   const logout = () => {
+    sessionStorage.removeItem("potterCommunityAccessToken");
+    sessionStorage.removeItem("potterCommunityUser");
+    sessionStorage.removeItem("potterCommunityDemoMode");
+    setActiveUser(null);
+    setActiveRole("General Member");
     setAuthenticated(false);
     setCurrentPage("home");
   };
@@ -427,6 +551,7 @@ function App() {
           navigate={navigate}
           cart={cart}
           activeRole={activeRole}
+          activeUser={activeUser}
         />
 
         {!authenticated ? (
@@ -445,6 +570,7 @@ function App() {
             currentPage={currentPage}
             navigate={navigate}
             activeRole={activeRole}
+            activeUser={activeUser}
             search={search}
             setSearch={setSearch}
             addToCart={addToCart}
@@ -457,8 +583,11 @@ function App() {
         <AuthModal
           type={authModal}
           close={() => setAuthModal(null)}
-          onAuthenticated={(role) => {
-            setActiveRole(role || "General Member");
+          onAuthenticated={(role, user) => {
+            const assignedRole = normalizeCommunityRole(role || user?.role || "General Member");
+            setActiveRole(assignedRole);
+            setActiveUser(user || null);
+            try { if (user) sessionStorage.setItem("potterCommunityUser", JSON.stringify({ ...user, role: assignedRole })); } catch {}
             setAuthenticated(true);
             setAuthModal(null);
             setCurrentPage("dashboard");
@@ -498,6 +627,7 @@ function Header({
   navigate,
   cart,
   activeRole,
+  activeUser,
 }) {
   const [profile, setProfile] = useState(() => {
     try {
@@ -1191,6 +1321,7 @@ function MemberContent({
   currentPage,
   navigate,
   activeRole,
+  activeUser,
   search,
   setSearch,
   addToCart,
@@ -1272,7 +1403,7 @@ function MemberContent({
   const eventHistory = eventHistoryFilter === "All" ? registeredEvents : eventHistoryFilter === "Attended" ? attendedEvents : eventHistoryFilter === "Absent" ? absentEvents : registeredEvents.filter((item) => !item.attendance?.[currentMemberName]);
 
   if (currentPage === "dashboard") {
-    return <Dashboard navigate={navigate} />;
+    return <Dashboard navigate={navigate} activeRole={activeRole} activeUser={activeUser} />;
   }
 
   if (currentPage === "announcements") {
@@ -1334,13 +1465,11 @@ function MemberContent({
             <div className="wide"><button className="pc-event-btn" type="submit"><Check size={15}/> Publish event</button></div>
           </form></section>}
           <section className="pc-event-panel"><div className="pc-event-panel-head"><div><h2>Upcoming events</h2><p>Only events published by an authorized organizer appear here.</p></div><span className="pc-event-status">{upcomingEvents.length} published</span></div>
-            {upcomingEvents.length ? <div className="pc-event-grid">{upcomingEvents.map((item)=>{const isRegistered=(item.registrations||[]).some((entry)=>entry.name===currentMemberName);const attendance=item.attendance||{};return <article className="pc-event-card" key={item.id}><div className="pc-event-card-top"><div className="pc-event-datebox"><div className="pc-event-date-icon"><CalendarDays size={21}/></div><div><h3>{item.title}</h3><small>Published by {item.createdBy || "Authorized organizer"}</small></div></div><span className="pc-event-status">{item.registrationEnabled ? "Registration open" : "Registration closed"}</span></div><div className="pc-event-card-body"><div className="pc-event-meta"><span><CalendarDays size={13}/>{item.date}</span><span><Clock size={13}/>{item.time}</span><span><MapPin size={13}/>{item.venue}</span></div><p>{item.description}</p>{item.announcement && <div className="pc-event-notice"><strong>Announcement:</strong> {item.announcement}</div>}<div className="pc-event-card-actions">{item.registrationEnabled && <button className="pc-event-btn secondary" disabled={isRegistered} onClick={()=>registerForEvent(item.id)}>{isRegistered ? <><Check size={14}/> Registered</> : <>Register for event <ArrowRight size={14}/></>}</button>}{isRegistered && <span className="pc-event-status green">{attendance[currentMemberName]?.status || "Awaiting check-in"}</span>}{canManageEvents && <span className="pc-event-status">{(item.registrations||[]).length} registrations</span>}</div>{canManageEvents && (item.registrations||[]).length>0 && <div style={{marginTop:14,paddingTop:12,borderTop:"1px solid #f0e3d9"}}><strong style={{fontSize:11}}>Attendance register</strong>{item.registrations.map((entry)=><div key={entry.name} className="pc-event-history-row"><div><h3>{entry.name}</h3><p>Registered {new Date(entry.registeredAt).toLocaleDateString()}</p></div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}><button className="pc-event-btn secondary" onClick={()=>updateAttendance(item.id,entry.name,"Attended")}>Mark attended</button><button className="pc-event-btn secondary" onClick={()=>updateAttendance(item.id,entry.name,"Absent")}>Mark absent</button></div></div>)}</div>}</div></article>})}</div> : <div className="pc-event-empty"><CalendarDays size={28}/><strong>No published events yet</strong><span>When an authorized organizer publishes an event, it will appear here. No sample events are shown.</span></div>}
+            {upcomingEvents.length ? <div className="pc-event-grid">{upcomingEvents.map((item)=>{const isRegistered=(item.registrations||[]).some((entry)=>entry.name===currentMemberName);const attendance=item.attendance||{};return <article className="pc-event-card" key={item.id}><div className="pc-event-card-top"><div className="pc-event-datebox"><div className="pc-event-date-icon"><CalendarDays size={21}/></div><div><h3>{item.title}</h3><small>Published by {item.createdBy || "Authorized organizer"}</small></div></div><span className="pc-event-status">{item.registrationEnabled ? "Registration open" : "Registration closed"}</span></div><div className="pc-event-card-body"><div className="pc-event-meta"><span><CalendarDays size={13}/>{item.date}</span><span><Clock size={13}/>{item.time}</span><span><MapPin size={13}/>{item.venue}</span></div><p>{item.description}</p>{item.announcement && <div className="pc-event-notice"><strong>Announcement:</strong> {item.announcement}</div>}<div className="pc-event-card-actions">{item.registrationEnabled && <button className="pc-event-btn secondary" disabled={isRegistered} onClick={()=>registerForEvent(item.id)}>{isRegistered ? <><Check size={14}/> Registered</> : <>Register for event <ArrowRight size={14}/></>}</button>}{isRegistered && <span className="pc-event-status green">{attendance[currentMemberName]?.status || "Awaiting check-in"}</span>}{canManageEvents && <span className="pc-event-status">{(item.registrations||[]).length} registrations</span>}</div>{canManageEvents && (item.registrations||[]).length>0 && <div style={{marginTop:14,paddingTop:12,borderTop:"1px solid #f0e3d9"}}><strong style={{fontSize:11}}>Attendance register</strong>{item.registrations.map((entry)=><div key={entry.name} className="pc-event-history-row"><div><h3>{entry.name}</h3><p>Registered {new Date(entry.registeredAt).toLocaleDateString()}</p></div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}><button className="pc-event-btn secondary" onClick={()=>updateAttendance(item.id,entry.name,"Attended")}>Mark attended</button><button className="pc-event-btn secondary" onClick={()=>updateAttendance(item.id,entry.name,"Absent")}>Mark absent</button></div></div>)}</div>}</div></article>})}</div> : <div className="pc-event-empty"><CalendarDays size={28}/><strong>No published events yet</strong></div>}
           </section>
           <section className="pc-event-panel"><div className="pc-event-panel-head"><div><h2>My event history</h2><p>Registration is not counted as attendance until an authorized organizer verifies check-in.</p></div><select className="pc-event-select" value={eventHistoryFilter} onChange={(e)=>setEventHistoryFilter(e.target.value)}><option>All</option><option>Awaiting check-in</option><option>Attended</option><option>Absent</option></select></div>
-            {eventHistory.length ? eventHistory.map((item)=><div className="pc-event-history-row" key={item.id}><div><h3>{item.title}</h3><p>{item.date} at {item.time} · {item.venue}</p><p>Registered on {new Date((item.registrations||[]).find((entry)=>entry.name===currentMemberName)?.registeredAt || item.createdAt).toLocaleDateString()}</p></div><span className={`pc-event-status ${item.attendance?.[currentMemberName]?.status === "Attended" ? "green" : ""}`}>{item.attendance?.[currentMemberName]?.status || "Awaiting check-in"}</span></div>) : <div className="pc-event-empty"><CalendarDays size={24}/><strong>No event history yet</strong><span>Events you register for will appear here with their verified attendance status.</span></div>}
+            {eventHistory.length ? eventHistory.map((item)=><div className="pc-event-history-row" key={item.id}><div><h3>{item.title}</h3><p>{item.date} at {item.time} · {item.venue}</p><p>Registered on {new Date((item.registrations||[]).find((entry)=>entry.name===currentMemberName)?.registeredAt || item.createdAt).toLocaleDateString()}</p></div><span className={`pc-event-status ${item.attendance?.[currentMemberName]?.status === "Attended" ? "green" : ""}`}>{item.attendance?.[currentMemberName]?.status || "Awaiting check-in"}</span></div>) : <div className="pc-event-empty"><CalendarDays size={24}/><strong>No event history yet</strong></div>}
           </section>
-          <div className="pc-event-notice"><ShieldCheck size={14} style={{verticalAlign:"middle",marginRight:6}}/>Attendance must be recorded by an authorized organizer through check-in or another approved method. Registration alone does not prove attendance.</div>
-          {!canManageEvents && <p style={{fontSize:10,color:"#8a7768",marginTop:12}}>Event creation and attendance management are available to authorized organizers only. Your account's actual permissions must be confirmed by the server in a production deployment.</p>}
         </div>
       </PageWrapper>
     );
@@ -1896,7 +2025,7 @@ function MatrimonialCard({
    DASHBOARD
 ========================================================= */
 
-function Dashboard({ navigate }) {
+function Dashboard({ navigate, activeRole = "General Member", activeUser = null }) {
   const [profile, setProfile] = useState(() => {
     try {
       return getStoredProfile();
@@ -1922,8 +2051,12 @@ function Dashboard({ navigate }) {
       );
   }, []);
 
-  const initials = profile.fullName
-    ? profile.fullName
+  const dashboardRole = normalizeCommunityRole(activeRole);
+  const dashboardConfig = ROLE_DASHBOARD_CONFIG[dashboardRole] || ROLE_DASHBOARD_CONFIG["General Member"];
+  const displayName = activeUser?.fullName || activeUser?.name || profile.fullName || "Member";
+
+  const initials = displayName
+    ? displayName
         .trim()
         .split(/\s+/)
         .slice(0, 2)
@@ -1936,21 +2069,31 @@ function Dashboard({ navigate }) {
       <div className="dashboard-welcome">
         <div>
           <span className="welcome-small">
-            WELCOME BACK
+            {dashboardRole.toUpperCase()}
           </span>
 
-          <h1>Hello, Suraj Kumar 👋</h1>
+          <h1>Hello, {displayName} 👋</h1>
 
-          <p>
-            Here is what's happening in your Potter
-            Community.
-          </p>
+          <p>{dashboardConfig.description}</p>
         </div>
 
         <div className="verified-badge-large">
           <CheckCircle size={17} />
-          Verified Member
+          {activeUser?.membershipStatus === "PENDING" ? "Membership Pending" : dashboardRole}
         </div>
+      </div>
+
+      <div className="role-dashboard-actions" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(175px, 1fr))", gap: 12, margin: "0 0 22px" }}>
+        {dashboardConfig.actions.map((action) => (
+          <button
+            key={`${dashboardRole}-${action.page}`}
+            type="button"
+            onClick={() => navigate(action.page)}
+            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, textAlign: "left", padding: "15px 16px", border: "1px solid #ead8c9", borderRadius: 13, background: "#fffdf9", color: "#503527", cursor: "pointer", fontWeight: 750, fontSize: 12 }}
+          >
+            <span>{action.label}</span><ArrowRight size={15} />
+          </button>
+        ))}
       </div>
 
       <div className="dashboard-stats">
@@ -2873,7 +3016,7 @@ function PaymentsPage({ activeRole, cart = [] }) {
       nextFees[key] = value === "" ? "" : Number(value);
     }
     persist({ ...paymentData, fees: nextFees });
-    setNotice("Fee configuration saved in this browser. Production changes must be approved and stored by the server.");
+    setNotice("Fee configuration saved.");
   };
   // Loads Razorpay Checkout only when a member chooses to pay.
   const loadRazorpayCheckout = () => new Promise((resolve, reject) => {
@@ -3026,7 +3169,7 @@ function PaymentsPage({ activeRole, cart = [] }) {
   const verifyPayment = (paymentId) => {
     if (!canManageFinance) return;
     persist({ ...paymentData, payments: paymentData.payments.map((p) => p.id === paymentId ? { ...p, status: "Verified", verifiedAt: new Date().toISOString(), verifiedByRole: role } : p) });
-    setNotice("Payment record marked verified in this local demo. Confirm the real gateway transaction before doing this in production.");
+    setNotice("Payment record marked verified.");
   };
   const requestRefund = (e) => {
     e.preventDefault();
@@ -3040,7 +3183,7 @@ function PaymentsPage({ activeRole, cart = [] }) {
     const refund = { id: `RFD-${Date.now().toString(36).toUpperCase()}`, paymentId: payment.id, transactionReference: payment.transactionReference, amount: Number(refundAmount.toFixed(2)), reason: refundDraft.reason.trim(), status: "Requested", createdAt: new Date().toISOString(), createdByRole: role };
     persist({ ...paymentData, refunds: [refund, ...paymentData.refunds] });
     setRefundDraft({ paymentId: "", amount: "", reason: "" });
-    setNotice(`Refund request ${refund.id} recorded. No money has been refunded by this frontend demo.`);
+    setNotice(`Refund request ${refund.id} recorded.`);
     setActiveTab("refunds");
   };
   const updateRefund = (refundId, status) => {
@@ -3051,12 +3194,12 @@ function PaymentsPage({ activeRole, cart = [] }) {
   const reconcile = (paymentId) => {
     if (!canManageFinance) return;
     persist({ ...paymentData, payments: paymentData.payments.map((p) => p.id === paymentId ? { ...p, reconciled: true, reconciledAt: new Date().toISOString(), reconciledByRole: role } : p) });
-    setNotice("Record marked reconciled in this local demo. A production reconciliation must match the gateway settlement report.");
+    setNotice("Record marked reconciled.");
   };
   const printReceipt = (payment) => {
     const win = window.open("", "_blank", "width=700,height=800");
     if (!win) { setNotice("Allow pop-ups to print the receipt."); return; }
-    win.document.write(`<!doctype html><html><head><title>Potter Community payment acknowledgement</title><style>body{font-family:Arial,sans-serif;color:#39271d;padding:32px;max-width:700px;margin:auto}h1{color:#a95736}hr{border:0;border-top:1px solid #e7d6c8}small{color:#76685e}.notice{background:#fff1e5;padding:12px;border:1px solid #e8c9b5;margin:18px 0}.row{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #eee}</style></head><body><h1>Potter Community</h1><h2>Payment Record Acknowledgement</h2><div class="notice">This acknowledgement records information entered in the website. It is not proof of a completed payment unless independently verified against the payment provider.</div><div class="row"><b>Record ID</b><span>${payment.id}</span></div><div class="row"><b>Acknowledgement No.</b><span>${payment.receiptNumber}</span></div><div class="row"><b>Payer</b><span>${payment.payerName}</span></div><div class="row"><b>Payment type</b><span>${payment.typeLabel}</span></div><div class="row"><b>Amount</b><span>₹${Number(payment.amount).toFixed(2)}</span></div><div class="row"><b>Transaction reference</b><span>${payment.transactionReference}</span></div><div class="row"><b>Status</b><span>${payment.status}</span></div><div class="row"><b>Recorded on</b><span>${new Date(payment.createdAt).toLocaleString()}</span></div><hr/><small>Membership approval is a separate decision. Payment alone does not grant membership.</small><script>window.onload=()=>window.print()</script></body></html>`);
+    win.document.write(`<!doctype html><html><head><title>Potter Community payment acknowledgement</title><style>body{font-family:Arial,sans-serif;color:#39271d;padding:32px;max-width:700px;margin:auto}h1{color:#a95736}hr{border:0;border-top:1px solid #e7d6c8}small{color:#76685e}.notice{background:#fff1e5;padding:12px;border:1px solid #e8c9b5;margin:18px 0}.row{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid #eee}</style></head><body><h1>Potter Community</h1><h2>Payment Record Acknowledgement</h2><div class="row"><b>Record ID</b><span>${payment.id}</span></div><div class="row"><b>Acknowledgement No.</b><span>${payment.receiptNumber}</span></div><div class="row"><b>Payer</b><span>${payment.payerName}</span></div><div class="row"><b>Payment type</b><span>${payment.typeLabel}</span></div><div class="row"><b>Amount</b><span>₹${Number(payment.amount).toFixed(2)}</span></div><div class="row"><b>Transaction reference</b><span>${payment.transactionReference}</span></div><div class="row"><b>Status</b><span>${payment.status}</span></div><div class="row"><b>Recorded on</b><span>${new Date(payment.createdAt).toLocaleString()}</span></div><script>window.onload=()=>window.print()</script></body></html>`);
     win.document.close();
   };
   const visiblePayments = paymentData.payments.filter((p) => filter === "All" || p.status === filter || (filter === "Unreconciled" && !p.reconciled));
@@ -3072,10 +3215,6 @@ function PaymentsPage({ activeRole, cart = [] }) {
   return (
     <PageWrapper>
       <PageHeader title="Payments & Membership Fees" description="Review fee requirements, record payment references, download acknowledgements, and manage finance records." />
-      <div style={{ background: "#f8e9de", border: "1px solid #ebd0bd", borderRadius: 14, padding: "14px 16px", display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 20 }}>
-        <ShieldCheck size={21} color="#a95736" style={{ flexShrink: 0, marginTop: 1 }} />
-        <div><strong style={{ fontSize: 13, color: "#583727" }}>Secure payment notice</strong><p style={{ margin: "5px 0 0", color: "#795d4c", fontSize: 11, lineHeight: 1.6 }}>No money is collected by this frontend. Real payments require a payment gateway, server-side verification, signed webhook validation, idempotency, duplicate-payment prevention, and audit logs. A successful payment does not automatically approve community membership.</p></div>
-      </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(165px,1fr))", gap: 12, marginBottom: 20 }}>
         {[
@@ -3084,13 +3223,6 @@ function PaymentsPage({ activeRole, cart = [] }) {
           { label: "Verified total", value: money(totalVerified), icon: IndianRupee },
           { label: "Refunds recorded", value: money(totalRefunded), icon: RotateCcw },
         ].map((item) => { const Icon = item.icon; return <div key={item.label} style={{ ...panelStyle, padding: 16, display: "flex", gap: 12, alignItems: "center" }}><div style={{ width: 42, height: 42, flexShrink: 0, borderRadius: 12, display: "grid", placeItems: "center", background: "#f6e4d7", color: "#a95736" }}><Icon size={20}/></div><div style={{ minWidth: 0 }}><div style={{ fontSize: 10, color: "#887366", marginBottom: 4 }}>{item.label}</div><strong style={{ fontSize: 16, color: "#442d20", overflowWrap: "anywhere" }}>{item.value}</strong></div></div>; })}
-      </div>
-
-      <div style={{ ...panelStyle, marginBottom: 18 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 15 }}><div style={{ width: 40, height: 40, borderRadius: 12, display: "grid", placeItems: "center", background: "#f6e4d7", color: "#a95736" }}><ClipboardCheck size={20}/></div><div><h2 style={{ margin: 0, fontSize: 17, color: "#442d20" }}>Membership payment flow</h2><p style={{ margin: "4px 0 0", color: "#8a7669", fontSize: 11 }}>Registration → Required documents → Fee calculation → Payment → Verification → Final approval</p></div></div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(125px,1fr))", gap: 8 }}>
-          {["Registration", "Required documents", "Fee calculation", "Payment", "Verification", "Final approval"].map((step, i) => <div key={step} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 9px", background: "#fff8f2", border: "1px solid #f0dfd2", borderRadius: 10 }}><span style={{ width: 23, height: 23, borderRadius: "50%", display: "grid", placeItems: "center", background: "#a95736", color: "white", fontSize: 10, fontWeight: 700, flexShrink: 0 }}>{i + 1}</span><span style={{ fontSize: 10, fontWeight: 650, color: "#614533" }}>{step}</span></div>)}
-        </div>
       </div>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
@@ -3102,19 +3234,15 @@ function PaymentsPage({ activeRole, cart = [] }) {
       {activeTab === "payments" && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,330px),1fr))", gap: 16, alignItems: "start" }}>
         <section style={panelStyle}>
           <h2 style={{ margin: "0 0 5px", fontSize: 17, color: "#442d20" }}>Pay securely online</h2>
-          <p style={{ margin: "0 0 17px", fontSize: 11, color: "#887366", lineHeight: 1.6 }}>Use Razorpay Checkout for supported payment methods such as UPI, cards, and net banking. The server must create the order and verify the result before this page marks it paid.</p>
           <form onSubmit={(e) => { e.preventDefault(); startGatewayPayment(); }} style={{ display: "grid", gap: 13 }}>
             <div><label style={labelStyle}>Payment type</label><select value={paymentType} onChange={(e) => chooseType(e.target.value)} style={inputStyle}><option value="membership-registration">Membership registration fee</option><option value="membership-renewal">Renewal fee</option><option value="marketplace-order">Marketplace order</option><option value="donation">Community donation</option><option value="event-fee">Event fee</option></select></div>
-            {paymentType === "marketplace-order" && cart.length > 0 && <div style={{ background: "#f9eee5", borderRadius: 9, padding: 10, fontSize: 11, color: "#76533e" }}>Your cart contains {cart.length} item(s). The backend must calculate and validate the final order total from trusted product prices; do not trust a browser-submitted amount.</div>}
-            <div><label style={labelStyle}>Amount (₹)</label><input type="number" min="0.01" step="0.01" required value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={configuredAmountForType(paymentType) !== "" ? `Configured fee: ₹${configuredAmountForType(paymentType)}` : "Enter amount in INR"} style={inputStyle}/>{configuredAmountForType(paymentType) === "" && ["membership-registration", "membership-renewal", "event-fee"].includes(paymentType) && <small style={{ display: "block", color: "#9b5c3c", marginTop: 5 }}>This fee has not been configured by an authorized role. The backend must enforce the approved fee.</small>}</div>
+            <div><label style={labelStyle}>Amount (₹)</label><input type="number" min="0.01" step="0.01" required value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={configuredAmountForType(paymentType) !== "" ? `Configured fee: ₹${configuredAmountForType(paymentType)}` : "Enter amount in INR"} style={inputStyle}/></div>
             <div><label style={labelStyle}>Payer full name</label><input required value={payerName} onChange={(e) => setPayerName(e.target.value)} placeholder="Enter payer name" style={inputStyle}/></div>
             <div><label style={labelStyle}>Email for receipt (optional)</label><input type="email" value={payerEmail} onChange={(e) => setPayerEmail(e.target.value)} placeholder="name@example.com" style={inputStyle}/></div>
             <button type="submit" className="btn btn-primary" disabled={isProcessingPayment} style={{ justifyContent: "center", width: "100%", opacity: isProcessingPayment ? 0.7 : 1 }}><CreditCard size={16}/>{isProcessingPayment ? "Connecting to payment service…" : `Pay ₹${Number(amount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} securely`}</button>
-            <small style={{ color: "#8a7669", fontSize: 10, lineHeight: 1.6 }}>Never enter your UPI PIN, card PIN, CVV, or OTP into Potter Community forms. Enter sensitive payment details only in the payment provider's checkout.</small>
           </form>
           <div style={{ borderTop: "1px solid #f0e5dc", marginTop: 18, paddingTop: 16 }}>
             <h3 style={{ margin: "0 0 5px", fontSize: 13, color: "#442d20" }}>Already paid outside this checkout?</h3>
-            <p style={{ margin: "0 0 12px", fontSize: 11, color: "#887366", lineHeight: 1.5 }}>Submit an offline reference for finance review. This does not initiate or confirm a payment.</p>
             <form onSubmit={createPaymentRecord} style={{ display: "grid", gap: 11 }}>
               <div><label style={labelStyle}>Transaction reference (required)</label><input required value={externalReference} onChange={(e) => setExternalReference(e.target.value)} placeholder="UPI / bank / gateway reference" style={inputStyle}/></div>
               <button type="submit" className="btn btn-outline" style={{ justifyContent: "center", width: "100%" }}><Receipt size={16}/> Submit offline reference</button>
@@ -3122,15 +3250,13 @@ function PaymentsPage({ activeRole, cart = [] }) {
           </div>
         </section>
         <section style={panelStyle}>
-          <h2 style={{ margin: "0 0 5px", fontSize: 17, color: "#442d20" }}>Fee summary</h2><p style={{ margin: "0 0 15px", fontSize: 11, color: "#887366" }}>Amounts appear only when configured by an authorized role. Final amounts must be validated by the server.</p>
+          <h2 style={{ margin: "0 0 5px", fontSize: 17, color: "#442d20" }}>Fee summary</h2>
           {[{ title: "Membership registration fee", value: paymentData.fees.registration }, { title: "Renewal fee", value: paymentData.fees.renewal }, { title: "Event fee", value: paymentData.fees.event }, { title: "Marketplace orders", value: "variable" }, { title: "Community donations", value: "voluntary" }].map((item) => <div key={item.title} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "12px 0", borderBottom: "1px solid #f0e5dc" }}><span style={{ fontSize: 12, color: "#634b3b" }}>{item.title}</span><strong style={{ fontSize: 12, color: "#503627", textAlign: "right" }}>{typeof item.value === "number" || item.value === "" ? money(item.value) : item.value === "variable" ? "Order total" : "No fixed fee"}</strong></div>)}
-          <div style={{ marginTop: 15, background: "#f8eee5", padding: 12, borderRadius: 10, color: "#76533e", fontSize: 11, lineHeight: 1.6 }}>Membership renewal is applicable only if community policy enables it. Do not switch to live keys until test payments, verification, webhook handling, refunds, and database persistence have been tested.</div>
-          <div style={{ marginTop: 12, border: "1px solid #ead9cc", borderRadius: 10, padding: 12, fontSize: 11, color: "#76533e", lineHeight: 1.6 }}><strong>Integration status:</strong> Checkout is ready to call <code>/api/payments/create-order</code> and <code>/api/payments/verify</code>. Those endpoints must exist in your backend; this frontend cannot securely create orders or verify payments by itself.</div>
         </section>
       </div>}
 
       {activeTab === "fees" && canConfigureFees && <section style={panelStyle}>
-        <h2 style={{ margin: "0 0 5px", fontSize: 17, color: "#442d20" }}>Configure community fees</h2><p style={{ margin: "0 0 17px", fontSize: 11, color: "#887366", lineHeight: 1.6 }}>For admin or authorized committee use. Changes here are saved only in this browser and should be approved and persisted server-side in production.</p>
+        <h2 style={{ margin: "0 0 5px", fontSize: 17, color: "#442d20" }}>Configure community fees</h2>
         <form onSubmit={saveFees} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 14 }}>
           {[{ key: "registration", label: "Membership registration fee (₹)" }, { key: "renewal", label: "Membership renewal fee (₹)" }, { key: "event", label: "Event fee (₹)" }].map((item) => <div key={item.key}><label style={labelStyle}>{item.label}</label><input type="number" min="0" step="0.01" value={feeDraft[item.key]} onChange={(e) => setFeeDraft({ ...feeDraft, [item.key]: e.target.value })} placeholder={paymentData.fees[item.key] === "" ? "Not configured" : String(paymentData.fees[item.key])} style={inputStyle}/></div>)}
           <div style={{ gridColumn: "1 / -1", display: "flex", gap: 10, flexWrap: "wrap" }}><button type="submit" className="btn btn-primary"><Check size={15}/> Save fee configuration</button><button type="button" className="btn btn-outline" onClick={() => setFeeDraft({ registration: paymentData.fees.registration === "" ? "" : String(paymentData.fees.registration), renewal: paymentData.fees.renewal === "" ? "" : String(paymentData.fees.renewal), event: paymentData.fees.event === "" ? "" : String(paymentData.fees.event) })}>Load current fees</button></div>
@@ -3138,17 +3264,15 @@ function PaymentsPage({ activeRole, cart = [] }) {
       </section>}
 
       {activeTab === "refunds" && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,320px),1fr))", gap: 16, alignItems: "start" }}>
-        {canManageFinance && <section style={panelStyle}><h2 style={{ margin: "0 0 5px", fontSize: 17, color: "#442d20" }}>Record refund request</h2><p style={{ margin: "0 0 15px", fontSize: 11, color: "#887366" }}>Refunds are records only; processing must occur through the payment provider.</p><form onSubmit={requestRefund} style={{ display: "grid", gap: 12 }}><div><label style={labelStyle}>Verified payment</label><select required value={refundDraft.paymentId} onChange={(e) => { const payment = paymentData.payments.find((p) => p.id === e.target.value); setRefundDraft({ ...refundDraft, paymentId: e.target.value, amount: payment ? String(payment.amount) : "" }); }} style={inputStyle}><option value="">Choose a verified payment</option>{paymentData.payments.filter((p) => p.status === "Verified").map((p) => <option key={p.id} value={p.id}>{p.id} · ₹{p.amount.toFixed(2)} · {p.payerName}</option>)}</select></div><div><label style={labelStyle}>Refund amount (₹)</label><input type="number" required min="0.01" step="0.01" value={refundDraft.amount} onChange={(e) => setRefundDraft({ ...refundDraft, amount: e.target.value })} style={inputStyle}/></div><div><label style={labelStyle}>Reason</label><textarea required rows="3" value={refundDraft.reason} onChange={(e) => setRefundDraft({ ...refundDraft, reason: e.target.value })} placeholder="Reason for refund request" style={{ ...inputStyle, resize: "vertical" }}/></div><button className="btn btn-primary" type="submit"><RotateCcw size={15}/> Save refund record</button></form></section>}
+        {canManageFinance && <section style={panelStyle}><h2 style={{ margin: "0 0 5px", fontSize: 17, color: "#442d20" }}>Record refund request</h2><form onSubmit={requestRefund} style={{ display: "grid", gap: 12 }}><div><label style={labelStyle}>Verified payment</label><select required value={refundDraft.paymentId} onChange={(e) => { const payment = paymentData.payments.find((p) => p.id === e.target.value); setRefundDraft({ ...refundDraft, paymentId: e.target.value, amount: payment ? String(payment.amount) : "" }); }} style={inputStyle}><option value="">Choose a verified payment</option>{paymentData.payments.filter((p) => p.status === "Verified").map((p) => <option key={p.id} value={p.id}>{p.id} · ₹{p.amount.toFixed(2)} · {p.payerName}</option>)}</select></div><div><label style={labelStyle}>Refund amount (₹)</label><input type="number" required min="0.01" step="0.01" value={refundDraft.amount} onChange={(e) => setRefundDraft({ ...refundDraft, amount: e.target.value })} style={inputStyle}/></div><div><label style={labelStyle}>Reason</label><textarea required rows="3" value={refundDraft.reason} onChange={(e) => setRefundDraft({ ...refundDraft, reason: e.target.value })} placeholder="Reason for refund request" style={{ ...inputStyle, resize: "vertical" }}/></div><button className="btn btn-primary" type="submit"><RotateCcw size={15}/> Save refund record</button></form></section>}
         <section style={panelStyle}><h2 style={{ margin: "0 0 13px", fontSize: 17, color: "#442d20" }}>Refund history</h2>{paymentData.refunds.length === 0 ? <EmptyState title="No refund records yet" description="Refund requests and their processing status will appear here."/> : paymentData.refunds.map((r) => <div key={r.id} style={{ padding: "13px 0", borderBottom: "1px solid #f0e5dc" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}><strong style={{ fontSize: 12 }}>{r.id}</strong><span style={statusStyle(r.status)}>{r.status}</span></div><p style={{ margin: "7px 0", fontSize: 12, color: "#684c3b" }}>₹{r.amount.toFixed(2)} · Payment {r.paymentId}</p><p style={{ margin: "0 0 8px", fontSize: 11, color: "#887366" }}>{r.reason}</p><small style={{ color: "#9b887b" }}>{formatDate(r.createdAt)}</small>{canManageFinance && <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginTop: 10 }}>{r.status === "Requested" && <><button className="btn btn-outline" type="button" onClick={() => updateRefund(r.id, "Approved for processing")}>Approve request</button><button className="btn btn-outline" type="button" onClick={() => updateRefund(r.id, "Rejected")}>Reject</button></>}{r.status === "Approved for processing" && <button className="btn btn-primary" type="button" onClick={() => updateRefund(r.id, "Refunded")}>Mark refunded</button>}</div>}</div>)}</section>
       </div>}
 
-      {activeTab === "reconciliation" && <section style={panelStyle}><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 14 }}><div><h2 style={{ margin: 0, fontSize: 17, color: "#442d20" }}>Payment reconciliation</h2><p style={{ margin: "5px 0 0", fontSize: 11, color: "#887366" }}>Compare recorded transaction references with official gateway/bank settlement reports.</p></div><span style={{ fontSize: 11, color: "#887366" }}>{paymentData.payments.filter((p) => !p.reconciled).length} unreconciled</span></div>{paymentData.payments.length === 0 ? <EmptyState title="No transactions to reconcile" description="Payment records will appear here after a member records a transaction."/> : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 750, fontSize: 11 }}><thead><tr style={{ textAlign: "left", background: "#f9eee6", color: "#6a4a37" }}>{["Reference", "Payer", "Type", "Amount", "Payment status", "Reconciliation", "Action"].map((h) => <th key={h} style={{ padding: 11 }}>{h}</th>)}</tr></thead><tbody>{paymentData.payments.map((p) => <tr key={p.id} style={{ borderBottom: "1px solid #f0e5dc" }}><td style={{ padding: 11 }}>{p.transactionReference}</td><td style={{ padding: 11 }}>{p.payerName}</td><td style={{ padding: 11 }}>{p.typeLabel}</td><td style={{ padding: 11 }}>₹{p.amount.toFixed(2)}</td><td style={{ padding: 11 }}><span style={statusStyle(p.status)}>{p.status}</span></td><td style={{ padding: 11 }}>{p.reconciled ? "Reconciled" : "Unreconciled"}</td><td style={{ padding: 11 }}>{canManageFinance && !p.reconciled ? <button type="button" className="btn btn-outline" onClick={() => reconcile(p.id)}>Mark reconciled</button> : "—"}</td></tr>)}</tbody></table></div>}{!canManageFinance && <p style={{ fontSize: 10, color: "#8a7768", marginBottom: 0 }}>Reconciliation actions are shown only to finance-authorized roles. Server-side permissions are required in production.</p>}</section>}
+      {activeTab === "reconciliation" && <section style={panelStyle}><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 14 }}><div><h2 style={{ margin: 0, fontSize: 17, color: "#442d20" }}>Payment reconciliation</h2></div><span style={{ fontSize: 11, color: "#887366" }}>{paymentData.payments.filter((p) => !p.reconciled).length} unreconciled</span></div>{paymentData.payments.length === 0 ? <EmptyState title="No transactions to reconcile" description="Payment records will appear here after a member records a transaction."/> : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 750, fontSize: 11 }}><thead><tr style={{ textAlign: "left", background: "#f9eee6", color: "#6a4a37" }}>{["Reference", "Payer", "Type", "Amount", "Payment status", "Reconciliation", "Action"].map((h) => <th key={h} style={{ padding: 11 }}>{h}</th>)}</tr></thead><tbody>{paymentData.payments.map((p) => <tr key={p.id} style={{ borderBottom: "1px solid #f0e5dc" }}><td style={{ padding: 11 }}>{p.transactionReference}</td><td style={{ padding: 11 }}>{p.payerName}</td><td style={{ padding: 11 }}>{p.typeLabel}</td><td style={{ padding: 11 }}>₹{p.amount.toFixed(2)}</td><td style={{ padding: 11 }}><span style={statusStyle(p.status)}>{p.status}</span></td><td style={{ padding: 11 }}>{p.reconciled ? "Reconciled" : "Unreconciled"}</td><td style={{ padding: 11 }}>{canManageFinance && !p.reconciled ? <button type="button" className="btn btn-outline" onClick={() => reconcile(p.id)}>Mark reconciled</button> : "—"}</td></tr>)}</tbody></table></div>}</section>}
 
       {activeTab === "treasurer" && canManageFinance && <div style={{ display: "grid", gap: 16 }}><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 12 }}>{[{ label: "Verified receipts total", value: money(totalVerified) }, { label: "Pending verification value", value: money(totalPending) }, { label: "Refunded total", value: money(totalRefunded) }, { label: "Unreconciled records", value: paymentData.payments.filter((p) => !p.reconciled).length }].map((item) => <div key={item.label} style={panelStyle}><span style={{ fontSize: 11, color: "#887366" }}>{item.label}</span><h2 style={{ margin: "8px 0 0", color: "#442d20", fontSize: 22 }}>{item.value}</h2></div>)}</div><section style={panelStyle}><h2 style={{ margin: "0 0 5px", fontSize: 17, color: "#442d20" }}>Treasurer review queue</h2><p style={{ margin: "0 0 15px", fontSize: 11, color: "#887366" }}>Verify transaction records against the payment provider before marking them verified.</p>{paymentData.payments.filter((p) => p.status === "Pending verification").length === 0 ? <EmptyState title="No payments awaiting verification" description="New payment records will appear here for finance review."/> : paymentData.payments.filter((p) => p.status === "Pending verification").map((p) => <div key={p.id} style={{ padding: "13px 0", borderBottom: "1px solid #f0e5dc", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}><div><strong style={{ fontSize: 12 }}>{p.id} · ₹{p.amount.toFixed(2)}</strong><p style={{ margin: "5px 0", fontSize: 11, color: "#6f5544" }}>{p.payerName} · {p.typeLabel}</p><small style={{ color: "#8a7669" }}>Ref: {p.transactionReference} · {formatDate(p.createdAt)}</small></div><button type="button" className="btn btn-primary" onClick={() => verifyPayment(p.id)}><CheckCircle size={14}/> Mark verified</button></div>)}</section></div>}
 
-      {activeTab === "payments" && <section style={{ ...panelStyle, marginTop: 16 }}><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 14 }}><div><h2 style={{ margin: 0, fontSize: 17, color: "#442d20" }}>Payment records & acknowledgements</h2><p style={{ margin: "5px 0 0", fontSize: 11, color: "#887366" }}>Print an acknowledgement for your records. This is not a gateway-issued tax receipt.</p></div><select value={filter} onChange={(e) => setFilter(e.target.value)} style={{ ...inputStyle, width: "auto", minWidth: 165 }}><option>All</option><option>Pending verification</option><option>Verified</option><option>Unreconciled</option></select></div>{visiblePayments.length === 0 ? <EmptyState title="No payment records yet" description="Your membership fees, renewals, donations, event fees, and marketplace payment references will appear here."/> : <div style={{ display: "grid", gap: 10 }}>{visiblePayments.map((p) => <div key={p.id} style={{ border: "1px solid #efdfd3", borderRadius: 12, padding: 14, display: "grid", gridTemplateColumns: "minmax(0,1.5fr) minmax(100px,.7fr) minmax(120px,.8fr) auto", gap: 12, alignItems: "center" }}><div><strong style={{ fontSize: 12, color: "#503627" }}>{p.typeLabel}</strong><p style={{ margin: "5px 0", color: "#887366", fontSize: 10 }}>{p.id} · {p.payerName} · {formatDate(p.createdAt)}</p><small style={{ color: "#9b887b", overflowWrap: "anywhere" }}>Transaction ref: {p.transactionReference}</small></div><strong style={{ color: "#442d20", fontSize: 14 }}>₹{p.amount.toFixed(2)}</strong><div><span style={statusStyle(p.status)}>{p.status}</span><div style={{ marginTop: 5, fontSize: 10, color: "#8a7669" }}>{p.reconciled ? "Reconciled" : "Not reconciled"}</div></div><button type="button" className="btn btn-outline" onClick={() => printReceipt(p)}><Receipt size={14}/> Print acknowledgement</button></div>)}</div>}</section>}
-
-      <div style={{ ...panelStyle, marginTop: 18, display: "flex", alignItems: "flex-start", gap: 10 }}><ShieldCheck size={18} color="#a95736" style={{ flexShrink: 0 }}/><div><strong style={{ fontSize: 12, color: "#503627" }}>Membership approval remains separate</strong><p style={{ margin: "5px 0 0", fontSize: 11, lineHeight: 1.6, color: "#887366" }}>The required process is registration → required documents → fee calculation → payment → payment verification → final membership decision. The frontend never approves membership merely because a payment record exists.</p></div></div>
+      {activeTab === "payments" && <section style={{ ...panelStyle, marginTop: 16 }}><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 14 }}><div><h2 style={{ margin: 0, fontSize: 17, color: "#442d20" }}>Payment records & acknowledgements</h2></div><select value={filter} onChange={(e) => setFilter(e.target.value)} style={{ ...inputStyle, width: "auto", minWidth: 165 }}><option>All</option><option>Pending verification</option><option>Verified</option><option>Unreconciled</option></select></div>{visiblePayments.length === 0 ? <EmptyState title="No payment records yet" description="Your membership fees, renewals, donations, event fees, and marketplace payment references will appear here."/> : <div style={{ display: "grid", gap: 10 }}>{visiblePayments.map((p) => <div key={p.id} style={{ border: "1px solid #efdfd3", borderRadius: 12, padding: 14, display: "grid", gridTemplateColumns: "minmax(0,1.5fr) minmax(100px,.7fr) minmax(120px,.8fr) auto", gap: 12, alignItems: "center" }}><div><strong style={{ fontSize: 12, color: "#503627" }}>{p.typeLabel}</strong><p style={{ margin: "5px 0", color: "#887366", fontSize: 10 }}>{p.id} · {p.payerName} · {formatDate(p.createdAt)}</p><small style={{ color: "#9b887b", overflowWrap: "anywhere" }}>Transaction ref: {p.transactionReference}</small></div><strong style={{ color: "#442d20", fontSize: 14 }}>₹{p.amount.toFixed(2)}</strong><div><span style={statusStyle(p.status)}>{p.status}</span><div style={{ marginTop: 5, fontSize: 10, color: "#8a7669" }}>{p.reconciled ? "Reconciled" : "Not reconciled"}</div></div><button type="button" className="btn btn-outline" onClick={() => printReceipt(p)}><Receipt size={14}/> Print acknowledgement</button></div>)}</div>}</section>}
     </PageWrapper>
   );
 }
@@ -3184,7 +3308,7 @@ function WidowAssistancePage() {
       benefitHistory: [],
     };
     setApplication(record);
-    setMessage("Your assistance request has been saved in this browser session only. This demo does not submit applications to a government department.");
+    setMessage("Your assistance request has been saved.");
   };
 
   const fieldStyle = {
@@ -3355,7 +3479,7 @@ function WidowAssistancePage() {
             <div style={{ textAlign: "center", padding: "26px 18px 30px" }}>
               <div style={{ width: 54, height: 54, margin: "0 auto 13px", borderRadius: 16, display: "grid", placeItems: "center", background: "#f8e7da", color: "#a9512f" }}><FileText size={24} /></div>
               <h3 style={{ margin: "0 0 7px", color: "#4a3025", fontSize: 16 }}>No request details saved yet</h3>
-              <p style={{ maxWidth: 490, margin: "0 auto", color: "#8a7062", fontSize: 12, lineHeight: 1.7 }}>Once you save the form above, this area will show your local reference number, recorded date, and a summary of the information. Official approval and payment status must be confirmed by the relevant department.</p>
+              
             </div>
           )}
         </div>
@@ -3581,7 +3705,6 @@ function DocumentsPage() {
                 style={{ display: "none" }}
               />
               {documentErrors[item.id] && <p role="alert" style={{ margin: 0, color: "#b42318", fontSize: 12, lineHeight: 1.45 }}>{documentErrors[item.id]}</p>}
-              <p style={{ margin: "auto 0 0", paddingTop: 2, fontSize: 11, lineHeight: 1.45, color: "#806b5e" }}>{item.note}</p>
             </div>
           );
         })}
@@ -3591,30 +3714,14 @@ function DocumentsPage() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, flexWrap: "wrap" }}>
           <div style={{ minWidth: 0, flex: 1 }}>
             <h3 style={{ margin: "0 0 5px", fontSize: 16, color: "#503326" }}>Ready to submit your documents?</h3>
-            <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: "#806b5e" }}>{documents.filter((item) => item.required && !uploadedDocuments[item.id]).length > 0 ? `Upload all 3 required documents to submit. ${documents.filter((item) => item.required && !uploadedDocuments[item.id]).length} required document(s) still missing.` : `${selectedCount} document type${selectedCount === 1 ? "" : "s"} selected. The first three are required; the last two are only needed if requested by the committee.`}</p>
           </div>
           <button type="submit" disabled={documents.some((item) => item.required && !uploadedDocuments[item.id])} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "12px 18px", border: 0, borderRadius: 9, background: documents.some((item) => item.required && !uploadedDocuments[item.id]) ? "#d8c6bb" : "#a95736", color: "#fff", fontWeight: 700, fontSize: 13, cursor: documents.some((item) => item.required && !uploadedDocuments[item.id]) ? "not-allowed" : "pointer", flexShrink: 0 }}>
             {submissionStatus ? "Submit updated documents" : "Submit documents for verification"} <ArrowRight size={16} />
           </button>
         </div>
         {submissionError && <p role="alert" style={{ margin: "10px 0 0", color: "#b42318", fontSize: 12 }}>{submissionError}</p>}
-        {submissionStatus && <div role="status" style={{ display: "flex", alignItems: "flex-start", gap: 9, marginTop: 12, padding: 12, borderRadius: 9, border: "1px solid #ead8b2", background: "#fff8e9", color: "#75551d" }}><Clock size={18} style={{ flexShrink: 0, marginTop: 1 }} /><div style={{ fontSize: 12, lineHeight: 1.5 }}><strong>Submission recorded in this session</strong><br />{submissionStatus.count} document type(s) marked as submitted at {submissionStatus.submittedAt}. This is a frontend demo only; the files have not been sent to a verification team.</div></div>}
+        {submissionStatus && <div role="status" style={{ display: "flex", alignItems: "flex-start", gap: 9, marginTop: 12, padding: 12, borderRadius: 9, border: "1px solid #ead8b2", background: "#fff8e9", color: "#75551d" }}><Clock size={18} style={{ flexShrink: 0, marginTop: 1 }} /><div style={{ fontSize: 12, lineHeight: 1.5 }}><strong>Submission recorded</strong><br />{submissionStatus.count} document type(s) marked as submitted at {submissionStatus.submittedAt}.</div></div>}
       </form>
-
-      <div style={{ marginTop: 20, padding: 16, border: "1px solid #ead8cc", borderRadius: 12, background: "#fffdfb" }}>
-        <h3 style={{ margin: "0 0 12px", fontSize: 15, color: "#503326" }}>Verification process</h3>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))", gap: 12 }}>
-          {[
-            { title: "1. Select documents", text: "Choose the documents relevant to your case.", icon: FileText, active: selectedCount > 0 },
-            { title: "2. Submit for review", text: submissionStatus ? "A local demo submission was recorded; backend delivery is not connected." : "Submit your selected documents to continue to review.", icon: Clock, active: Boolean(submissionStatus) },
-            { title: "3. Verification decision", text: "Approval or follow-up will appear when the verification system provides a status.", icon: ShieldCheck, active: false },
-          ].map((step) => {
-            const Icon = step.icon;
-            return <div key={step.title} style={{ display: "flex", alignItems: "flex-start", gap: 9 }}><div style={{ width: 32, height: 32, display: "grid", placeItems: "center", borderRadius: 9, flexShrink: 0, background: step.active ? "#f7e6dc" : "#f3eee9", color: step.active ? "#9b4e31" : "#8a776b" }}><Icon size={16} /></div><div><strong style={{ display: "block", fontSize: 12, color: "#503326", marginBottom: 4 }}>{step.title}</strong><p style={{ margin: 0, fontSize: 11, lineHeight: 1.5, color: "#806b5e" }}>{step.text}</p></div></div>;
-          })}
-        </div>
-        <p style={{ margin: "12px 0 0", paddingTop: 10, borderTop: "1px solid #f0e5de", fontSize: 11, lineHeight: 1.5, color: "#806b5e" }}>Files selected here remain in the current browser session and are not sent to a verification team. Secure submission, persistent storage, and genuine review statuses require backend integration.</p>
-      </div>
     </PageWrapper>
   );
 }
@@ -4062,9 +4169,6 @@ function ProfilePage() {
                   readOnly
                   aria-describedby="dob-lock-note"
                 />
-                <small id="dob-lock-note" style={{ display: "block", marginTop: 5, color: "#806b5e", fontSize: 11 }}>
-                  Date of birth is locked after registration. {profile.dateOfBirth ? `Calculated age: ${(() => { const d = new Date(`${profile.dateOfBirth}T00:00:00`); const now = new Date(); let a = now.getFullYear() - d.getFullYear(); if (now.getMonth() < d.getMonth() || (now.getMonth() === d.getMonth() && now.getDate() < d.getDate())) a--; return a; })()} years.` : "Age is calculated from this date."}
-                </small>
               </div>
 
               <div className="form-group">
@@ -4420,13 +4524,110 @@ function AuthModal({
   onRegistered,
 }) {
   const [mode, setMode] = useState(type);
-  const [selectedRole, setSelectedRole] = useState("General Member");
-  const [roleMenuOpen, setRoleMenuOpen] = useState(false);
-  const [roleSearch, setRoleSearch] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [certificateFile, setCertificateFile] = useState(null);
   const [certificateError, setCertificateError] = useState("");
+  const [phone, setPhone] = useState("");
+  const [otp, setOtp] = useState("");
+  const [signupOtpSent, setSignupOtpSent] = useState(false);
+  const [signupOtpVerified, setSignupOtpVerified] = useState(false);
+  const [phoneVerificationToken, setPhoneVerificationToken] = useState("");
+  const [loginOtpStep, setLoginOtpStep] = useState(false);
+  const [loginChallengeId, setLoginChallengeId] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState("");
+  const [authNotice, setAuthNotice] = useState("");
+  const [forgotPassword, setForgotPassword] = useState(false);
+  const [forgotPhone, setForgotPhone] = useState("");
+  const [forgotOtp, setForgotOtp] = useState("");
+  const [forgotChallengeId, setForgotChallengeId] = useState("");
+  const [forgotOtpSent, setForgotOtpSent] = useState(false);
+  const [forgotNewPassword, setForgotNewPassword] = useState("");
+  const [forgotConfirmPassword, setForgotConfirmPassword] = useState("");
+
+  const enterDemoWebsite = () => {
+    // Temporary frontend-only demo access while the authentication backend is being built.
+    // This does not verify identity and must not be used for production authentication.
+    try {
+      sessionStorage.setItem("potterCommunityDemoMode", "true");
+      sessionStorage.removeItem("potterCommunityAccessToken");
+    } catch {}
+    onAuthenticated("General Member", {
+      id: "demo-member",
+      fullName: "Demo Member",
+      email: "demo@pottercommunity.local",
+      phone: "",
+      role: "General Member",
+      membershipStatus: "DEMO",
+    });
+  };
+
+  const sendPasswordResetOtp = async () => {
+    setAuthError("");
+    setAuthNotice("");
+    const phoneValue = forgotPhone.trim();
+    if (!/^(?:\\+91)?[6-9]\\d{9}$/.test(phoneValue.replace(/[\\s()-]/g, ""))) {
+      setAuthError("Enter a valid 10-digit Indian mobile number.");
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      const result = await authApi("/api/auth/password/forgot", {
+        method: "POST",
+        body: JSON.stringify({ phone: phoneValue.replace(/[\\s()-]/g, "") }),
+      });
+      if (!result.challengeId) throw new Error("The server did not return a password-reset challenge.");
+      setForgotChallengeId(result.challengeId);
+      setForgotOtpSent(true);
+      setAuthNotice(result.message || "If the account exists, a password-reset OTP has been sent.");
+    } catch (error) {
+      setAuthError(error.message || "Unable to send reset OTP. Please try again.");
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const resetPasswordWithOtp = async (e) => {
+    e.preventDefault();
+    setAuthError("");
+    setAuthNotice("");
+    if (!/^\\d{4,8}$/.test(forgotOtp.trim())) {
+      setAuthError("Enter the OTP you received.");
+      return;
+    }
+    if (forgotNewPassword.length < 8) {
+      setAuthError("Your new password must contain at least 8 characters.");
+      return;
+    }
+    if (forgotNewPassword !== forgotConfirmPassword) {
+      setAuthError("The new passwords do not match.");
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      const result = await authApi("/api/auth/password/reset", {
+        method: "POST",
+        body: JSON.stringify({
+          challengeId: forgotChallengeId,
+          otp: forgotOtp.trim(),
+          newPassword: forgotNewPassword,
+        }),
+      });
+      setAuthNotice(result.message || "Password reset successfully. You can now sign in.");
+      setForgotPassword(false);
+      setForgotOtpSent(false);
+      setForgotChallengeId("");
+      setForgotOtp("");
+      setForgotNewPassword("");
+      setForgotConfirmPassword("");
+      setMode("signin");
+    } catch (error) {
+      setAuthError(error.message || "Unable to reset password. Please try again.");
+    } finally {
+      setAuthBusy(false);
+    }
+  };
 
   const handleCertificateChange = (e) => {
     const file = e.target.files?.[0];
@@ -4461,53 +4662,174 @@ function AuthModal({
     if (input) input.value = "";
   };
 
-  const submit = (e) => {
-    e.preventDefault();
-
-    if (mode === "signup") {
-      const formData = new FormData(e.currentTarget);
-      const password = String(formData.get("password") || "");
-      const confirmPassword = String(formData.get("confirmPassword") || "");
-      const dobValue = String(formData.get("dateOfBirth") || "");
-      const dob = dobValue ? new Date(`${dobValue}T00:00:00`) : null;
-      const today = new Date();
-      let age = dob ? today.getFullYear() - dob.getFullYear() : -1;
-      if (dob && (today.getMonth() < dob.getMonth() || (today.getMonth() === dob.getMonth() && today.getDate() < dob.getDate()))) age -= 1;
-      if (password !== confirmPassword) {
-        alert("Password and confirm password must match.");
-        return;
-      }
-      if (!dob || Number.isNaN(dob.getTime()) || age < 18) {
-        alert("Members must be at least 18 years old. Please check the date of birth.");
-        return;
-      }
-      if (!certificateFile) {
-        setCertificateError("Please upload your caste/community certificate to continue.");
-        return;
-      }
-      onRegistered();
-    } else {
-      onAuthenticated(selectedRole);
+  const sendSignupOtp = async () => {
+    setAuthError("");
+    setAuthNotice("");
+    const normalizedPhone = phone.replace(/\D/g, "");
+    if (!/^[6-9]\d{9}$/.test(normalizedPhone)) {
+      setAuthError("Enter a valid 10-digit Indian mobile number.");
+      return;
     }
+    setAuthBusy(true);
+    try {
+      const result = await authApi("/api/auth/otp/send", {
+        method: "POST", body: JSON.stringify({ phone: normalizedPhone, purpose: "signup" }),
+      });
+      setSignupOtpSent(true);
+      setSignupOtpVerified(false);
+      setPhoneVerificationToken("");
+      setOtp("");
+      setAuthNotice(result.message || "OTP sent. Check your phone and enter the code below.");
+    } catch (error) {
+      setAuthError(error.message || "Could not send OTP. Check your connection and try again.");
+    } finally { setAuthBusy(false); }
   };
 
-  const loginRoles = [
-    "General Member",
-    "Marketplace Seller",
-    "Super Admin",
-    "Admin",
-    "President / Head",
-    "Secretary",
-    "Treasurer",
-    "Director",
-    "Nominated Director",
-    "Scholarship Officer",
-    "Matrimonial Coordinator",
-    "Event Coordinator",
-    "Verification Officer",
-    "Media Coordinator",
-    "Legal Grievance Coordinator",
-  ];
+  const verifySignupOtp = async () => {
+    setAuthError("");
+    setAuthNotice("");
+    if (!/^\d{4,8}$/.test(otp.trim())) { setAuthError("Enter the OTP you received."); return; }
+    setAuthBusy(true);
+    try {
+      const result = await authApi("/api/auth/otp/verify", {
+        method: "POST", body: JSON.stringify({ phone: phone.replace(/\D/g, ""), otp: otp.trim(), purpose: "signup" }),
+      });
+      if (!result.verified || !result.verificationToken) throw new Error("The server did not confirm OTP verification. Please try again.");
+      setSignupOtpVerified(true);
+      setPhoneVerificationToken(result.verificationToken);
+      setAuthNotice("Phone number verified successfully.");
+      setAuthError("");
+    } catch (error) {
+      setSignupOtpVerified(false);
+      setPhoneVerificationToken("");
+      setAuthError(error.message || "OTP verification failed.");
+    } finally { setAuthBusy(false); }
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setAuthError("");
+    setAuthNotice("");
+    const form = e.currentTarget;
+    const formData = new FormData(form);
+    const password = String(formData.get("password") || "");
+    if (!password) { setAuthError("Password is required every time you sign in."); return; }
+    setAuthBusy(true);
+    try {
+      // TEMPORARY DEMO MODE: while backend auth is under development, any non-empty
+      // email/phone and password can enter as a General Member without API/OTP calls.
+      // Remove this branch before public deployment.
+      if (mode === "signin") {
+        const identifier = String(formData.get("identifier") || "").trim();
+        if (!identifier) throw new Error("Enter any email address or phone number to continue.");
+        try {
+          sessionStorage.setItem("potterCommunityDemoMode", "true");
+          sessionStorage.removeItem("potterCommunityAccessToken");
+        } catch {}
+        const demoUser = {
+          id: "demo-member",
+          fullName: "Demo Member",
+          email: identifier.includes("@") ? identifier : "demo@pottercommunity.local",
+          phone: identifier.includes("@") ? "" : identifier.replace(/\\D/g, ""),
+          role: "General Member",
+          membershipStatus: "DEMO",
+        };
+        onAuthenticated("General Member", demoUser);
+        return;
+      }
+      if (mode === "signup") {
+        const confirmPassword = String(formData.get("confirmPassword") || "");
+        const dobValue = String(formData.get("dateOfBirth") || "");
+        const dob = dobValue ? new Date(`${dobValue}T00:00:00`) : null;
+        const today = new Date();
+        let age = dob ? today.getFullYear() - dob.getFullYear() : -1;
+        if (dob && (today.getMonth() < dob.getMonth() || (today.getMonth() === dob.getMonth() && today.getDate() < dob.getDate()))) age -= 1;
+        if (password !== confirmPassword) throw new Error("Password and confirm password must match.");
+        if (password.length < 8) throw new Error("Use a password with at least 8 characters.");
+        if (!dob || Number.isNaN(dob.getTime()) || age < 18) throw new Error("Members must be at least 18 years old. Please check the date of birth.");
+        if (!certificateFile) { setCertificateError("Please upload your caste/community certificate to continue."); throw new Error("Please upload your caste/community certificate to continue."); }
+        if (!signupOtpVerified || !phoneVerificationToken) throw new Error("Verify your phone number with OTP before submitting the membership request.");
+
+        formData.set("phone", phone.replace(/\D/g, ""));
+        formData.set("phoneVerificationToken", phoneVerificationToken);
+        formData.delete("confirmPassword");
+        if (certificateFile) formData.set("certificate", certificateFile);
+        const result = await authApi("/api/auth/signup", { method: "POST", body: formData });
+        setAuthNotice(result.message || "Your account request was submitted successfully.");
+        onRegistered();
+      } else if (!loginOtpStep) {
+        const identifier = String(formData.get("identifier") || "").trim();
+        if (!identifier) throw new Error("Enter your email address or phone number.");
+        const result = await authApi("/api/auth/login", {
+          method: "POST", body: JSON.stringify({ identifier, password }),
+        });
+        if (!result.challengeId) throw new Error("The server did not create an OTP challenge. Please check the authentication backend setup.");
+        setLoginChallengeId(result.challengeId);
+        setLoginOtpStep(true);
+        setOtp("");
+        setAuthNotice(result.message || "Password accepted. An OTP has been sent to the phone number linked to your account.");
+      } else {
+        if (!/^\d{4,8}$/.test(otp.trim())) throw new Error("Enter the OTP you received.");
+        const result = await authApi("/api/auth/login/verify", {
+          method: "POST", body: JSON.stringify({ challengeId: loginChallengeId, otp: otp.trim() }),
+        });
+        if (!result.token || !result.user) throw new Error("The server did not return a valid authenticated session.");
+        // Keep the session for this browser tab only; backend must validate it on protected API calls.
+        sessionStorage.setItem("potterCommunityAccessToken", result.token);
+        const serverRole = result.user.role || result.role || "General Member";
+        onAuthenticated(serverRole, result.user);
+      }
+    } catch (error) {
+      setAuthError(error.message || "Unable to complete this request. Please try again.");
+    } finally { setAuthBusy(false); }
+  };
+
+  if (forgotPassword) {
+    return (
+      <div className="modal-overlay" style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, boxSizing: "border-box", overflowY: "auto", zIndex: 9999 }}>
+        <div className="auth-modal" style={{ width: "min(395px, calc(100vw - 32px))", maxWidth: 395, maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxSizing: "border-box", margin: "auto" }}>
+          <button className="modal-close" type="button" onClick={() => { setForgotPassword(false); setAuthError(""); setAuthNotice(""); }} aria-label="Close password reset">×</button>
+          <div className="auth-logo"><span>🏺</span></div>
+          <h2>Forgot Password</h2>
+          {!forgotOtpSent ? (
+            <div style={{ display: "grid", gap: 14 }}>
+              <div className="form-group">
+                <label htmlFor="forgot-phone">Registered Phone Number</label>
+                <input id="forgot-phone" type="tel" autoComplete="tel" value={forgotPhone} onChange={(e) => setForgotPhone(e.target.value)} placeholder="Enter your registered mobile number" required />
+              </div>
+              <button className="auth-submit" type="button" disabled={authBusy} onClick={sendPasswordResetOtp}>
+                {authBusy ? "Sending OTP…" : "Send Reset OTP"} <ArrowRight size={17} />
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={resetPasswordWithOtp} style={{ display: "grid", gap: 13 }}>
+              <div className="form-group">
+                <label htmlFor="forgot-otp">OTP</label>
+                <input id="forgot-otp" inputMode="numeric" autoComplete="one-time-code" value={forgotOtp} onChange={(e) => setForgotOtp(e.target.value.replace(/\\D/g, "").slice(0, 8))} placeholder="Enter OTP" required />
+              </div>
+              <div className="form-group">
+                <label htmlFor="forgot-new-password">New Password</label>
+                <input id="forgot-new-password" type="password" autoComplete="new-password" value={forgotNewPassword} onChange={(e) => setForgotNewPassword(e.target.value)} placeholder="At least 8 characters" required minLength={8} />
+              </div>
+              <div className="form-group">
+                <label htmlFor="forgot-confirm-password">Confirm New Password</label>
+                <input id="forgot-confirm-password" type="password" autoComplete="new-password" value={forgotConfirmPassword} onChange={(e) => setForgotConfirmPassword(e.target.value)} placeholder="Re-enter new password" required minLength={8} />
+              </div>
+              <button className="auth-submit" type="submit" disabled={authBusy}>
+                {authBusy ? "Resetting Password…" : "Verify OTP & Reset Password"} <ArrowRight size={17} />
+              </button>
+              <button type="button" className="auth-switch" style={{ border: 0, background: "transparent", cursor: "pointer" }} onClick={sendPasswordResetOtp} disabled={authBusy}>Resend OTP</button>
+            </form>
+          )}
+          {authError && <div role="alert" style={{ marginTop: 12, padding: 10, borderRadius: 9, background: "#fff1f0", color: "#b42318", fontSize: 12 }}>{authError}</div>}
+          {authNotice && <div role="status" style={{ marginTop: 12, padding: 10, borderRadius: 9, background: "#f0faf2", color: "#216b35", fontSize: 12 }}>{authNotice}</div>}
+          <div className="auth-switch" style={{ marginTop: 16 }}>
+            Remember your password? <button type="button" onClick={() => { setForgotPassword(false); setAuthError(""); setAuthNotice(""); setMode("signin"); }}>Sign In</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -4553,75 +4875,6 @@ function AuthModal({
             ? "Welcome Back"
             : "Join Potter Community"}
         </h2>
-
-        <p className="auth-description">
-          {mode === "signin"
-            ? "Sign in to access your verified member services."
-            : "Create your account and submit your details for verification."}
-        </p>
-
-        {mode === "signin" && (
-          <div style={{ margin: "0 0 15px", padding: "12px", borderRadius: 12, border: "1px solid #ead8ca", background: "linear-gradient(145deg, #fffaf6 0%, #fff5ed 100%)", boxShadow: "0 3px 10px rgba(92, 55, 34, 0.04)" }}>
-            <label htmlFor="login-role-trigger" style={{ display: "block", marginBottom: 8, color: "#51372b", fontSize: 12, fontWeight: 750, letterSpacing: "0.01em" }}>Sign in to your assigned workspace</label>
-            <div style={{ position: "relative" }}>
-              <button
-                id="login-role-trigger"
-                type="button"
-                aria-haspopup="listbox"
-                aria-expanded={roleMenuOpen}
-                onClick={() => { setRoleMenuOpen((open) => !open); setRoleSearch(""); }}
-                style={{ width: "100%", minHeight: 48, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, border: roleMenuOpen ? "1px solid #b45b38" : "1px solid #dfcbbc", borderRadius: 9, padding: "9px 12px", background: "#fff", color: "#49372c", boxSizing: "border-box", cursor: "pointer", textAlign: "left", boxShadow: roleMenuOpen ? "0 0 0 3px rgba(180,91,56,0.10)" : "none" }}
-              >
-                <span style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-                  <span style={{ width: 30, height: 30, borderRadius: 8, background: "#f7e5d8", color: "#a9502f", display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><Users size={16} /></span>
-                  <span style={{ minWidth: 0 }}>
-                    <span style={{ display: "block", fontSize: 13, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{selectedRole}</span>
-                    <span style={{ display: "block", marginTop: 2, fontSize: 10, color: "#8b7466" }}>Assigned workspace</span>
-                  </span>
-                </span>
-                <ChevronDown size={17} style={{ flexShrink: 0, transform: roleMenuOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 160ms ease", color: "#8a6b5a" }} />
-              </button>
-              {roleMenuOpen && (
-                <div style={{ position: "absolute", top: "calc(100% + 7px)", left: 0, right: 0, zIndex: 10020, border: "1px solid #e5d2c4", borderRadius: 11, background: "#fffdfb", boxShadow: "0 14px 35px rgba(53, 34, 24, 0.18)", overflow: "hidden" }}>
-                  <div style={{ padding: 9, borderBottom: "1px solid #f0e4db", background: "#fffaf6" }}>
-                    <div style={{ position: "relative" }}>
-                      <Search size={15} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "#9a8172", pointerEvents: "none" }} />
-                      <input aria-label="Search workspaces" type="text" value={roleSearch} onChange={(e) => setRoleSearch(e.target.value)} placeholder="Search role or workspace..." autoFocus style={{ width: "100%", minHeight: 36, boxSizing: "border-box", border: "1px solid #e7d7ca", borderRadius: 7, padding: "8px 10px 8px 32px", background: "#fff", color: "#49372c", fontSize: 12, outline: "none" }} />
-                    </div>
-                  </div>
-                  <div role="listbox" aria-label="Available workspaces" style={{ maxHeight: 225, overflowY: "auto", padding: 6 }}>
-                    {[
-                      { heading: "MEMBER ACCESS", roles: ["General Member", "Marketplace Seller"] },
-                      { heading: "GOVERNANCE & ADMINISTRATION", roles: ["Super Admin", "Admin", "President / Head", "Secretary", "Treasurer", "Director", "Nominated Director"] },
-                      { heading: "SERVICE COORDINATORS", roles: ["Scholarship Officer", "Matrimonial Coordinator", "Event Coordinator", "Verification Officer", "Media Coordinator", "Legal Grievance Coordinator"] },
-                    ].map((group) => {
-                      const filtered = group.roles.filter((role) => role.toLowerCase().includes(roleSearch.trim().toLowerCase()));
-                      if (!filtered.length) return null;
-                      return (
-                        <div key={group.heading}>
-                          <div style={{ padding: "8px 9px 5px", color: "#a06d52", fontSize: 9, fontWeight: 800, letterSpacing: "0.09em" }}>{group.heading}</div>
-                          {filtered.map((role) => {
-                            const active = selectedRole === role;
-                            return (
-                              <button key={role} type="button" role="option" aria-selected={active} onClick={() => { setSelectedRole(role); setRoleMenuOpen(false); setRoleSearch(""); }} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "9px 10px", border: "none", borderRadius: 7, background: active ? "#f8e9df" : "transparent", color: active ? "#914528" : "#554237", fontSize: 12, fontWeight: active ? 750 : 500, cursor: "pointer", textAlign: "left" }} onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = "#fff4ec"; }} onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent" }}>
-                                <span>{role}</span>{active && <Check size={15} color="#a9502f" />}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      );
-                    })}
-                    {!loginRoles.some((role) => role.toLowerCase().includes(roleSearch.trim().toLowerCase())) && <div style={{ padding: "18px 10px", color: "#8b7466", textAlign: "center", fontSize: 12 }}>No matching workspace found.</div>}
-                  </div>
-                </div>
-              )}
-            </div>
-            <p style={{ margin: "8px 0 0", fontSize: 10, lineHeight: 1.5, color: "#806b5e" }}>Choose the workspace assigned to your account. Access is determined by administrator-approved permissions.</p>
-          </div>
-        )}
-
-        {mode === "signup" && <div style={{ margin: "0 0 14px", padding: "10px 12px", borderRadius: 9, background: "#f2f6f9", border: "1px solid #d7e2ec", color: "#34495e", fontSize: 11, lineHeight: 1.5 }}>Membership requests are reviewed separately from account creation. Uploads and verification shown here are frontend-only until connected to the secure backend.</div>}
-
         <form onSubmit={submit}>
           {mode === "signup" && (
             <div className="form-group">
@@ -4636,33 +4889,31 @@ function AuthModal({
             </div>
           )}
 
-          <div className="form-group">
-            <label>Email Address</label>
-            <input
-              type={mode === "signup" ? "email" : "text"}
-              name="email"
-              inputMode="email"
-              autoComplete="email"
-              placeholder="Enter your personal email address"
-              required
-            />
-          </div>
-
-          {mode === "signup" && (
-            <div className="form-group">
-              <label>Phone Number</label>
-              <input
-                type="tel"
-                name="phone"
-                inputMode="numeric"
-                autoComplete="tel-national"
-                placeholder="10-digit mobile number"
-                pattern="[0-9]{10}"
-                maxLength={10}
-                onInput={(e) => { e.currentTarget.value = e.currentTarget.value.replace(/\D/g, "").slice(0, 10); }}
-                required
-              />
-            </div>
+          {mode === "signup" ? (
+            <>
+              <div className="form-group">
+                <label>Email Address</label>
+                <input type="email" name="email" inputMode="email" autoComplete="email" placeholder="Enter your personal email address" required />
+              </div>
+              <div className="form-group">
+                <label>Phone Number <span style={{ color: "#b45335" }}>*</span></label>
+                <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
+                  <input type="tel" name="phone" value={phone} onChange={(e) => { setPhone(e.target.value.replace(/\D/g, "").slice(0, 10)); setSignupOtpVerified(false); setPhoneVerificationToken(""); setSignupOtpSent(false); setAuthError(""); }} inputMode="numeric" autoComplete="tel-national" placeholder="10-digit mobile number" pattern="[0-9]{10}" maxLength={10} required style={{ flex: 1, minWidth: 0 }} />
+                  <button type="button" onClick={sendSignupOtp} disabled={authBusy || signupOtpVerified} style={{ border: "1px solid #c47c5a", borderRadius: 8, padding: "0 11px", background: signupOtpVerified ? "#e7f5e9" : "#fff4ec", color: signupOtpVerified ? "#24733a" : "#88432f", fontSize: 11, fontWeight: 750, cursor: authBusy || signupOtpVerified ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}>{signupOtpVerified ? "Verified ✓" : authBusy ? "Sending…" : signupOtpSent ? "Resend OTP" : "Send OTP"}</button>
+                </div>
+                {signupOtpSent && !signupOtpVerified && <div style={{ display: "flex", gap: 8, marginTop: 9 }}>
+                  <input aria-label="Signup OTP" inputMode="numeric" autoComplete="one-time-code" value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 8))} placeholder="Enter OTP" maxLength={8} style={{ flex: 1, minWidth: 0 }} />
+                  <button type="button" onClick={verifySignupOtp} disabled={authBusy} style={{ border: "1px solid #c47c5a", borderRadius: 8, padding: "0 12px", background: "#a9502f", color: "#fff", fontSize: 11, fontWeight: 750, cursor: authBusy ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}>{authBusy ? "Checking…" : "Verify OTP"}</button>
+                </div>}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="form-group">
+                <label>Email Address or Phone Number</label>
+                <input type="text" name="identifier" inputMode="text" autoComplete="username" placeholder="Email address or 10-digit mobile number" required disabled={loginOtpStep} />
+              </div>
+            </>
           )}
 
           <div className="form-group">
@@ -4686,12 +4937,26 @@ function AuthModal({
             </div>
           </div>
 
+          {mode === "signin" && !loginOtpStep && (
+            <div style={{ display: "flex", justifyContent: "flex-end", margin: "0 0 8px" }}>
+              <button type="button" onClick={() => { setForgotPassword(true); setAuthError(""); setAuthNotice(""); setForgotOtpSent(false); setForgotOtp(""); setForgotChallengeId(""); }} style={{ border: 0, padding: 0, background: "transparent", color: "#a65332", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                Forgot Password?
+              </button>
+            </div>
+          )}
+          {mode === "signin" && loginOtpStep && (
+            <div className="form-group" style={{ padding: 12, border: "1px solid #ead8ca", borderRadius: 10, background: "#fffaf6" }}>
+              <label>One-Time Password (OTP)</label>
+              <input name="loginOtp" inputMode="numeric" autoComplete="one-time-code" value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 8))} placeholder="Enter the OTP sent to your phone" maxLength={8} required />
+              <button type="button" onClick={() => { setLoginOtpStep(false); setLoginChallengeId(""); setOtp(""); setAuthError(""); setAuthNotice("Enter your credentials again to request a new OTP."); }} style={{ marginTop: 8, padding: 0, border: 0, background: "transparent", color: "#88432f", textDecoration: "underline", cursor: "pointer", fontSize: 11 }}>Start over / resend OTP</button>
+            </div>
+          )}
+
           {mode === "signup" && (
             <>
               <div className="form-group">
                 <label>Date of Birth (18+ required)</label>
                 <input type="date" name="dateOfBirth" max={new Date(new Date().setFullYear(new Date().getFullYear() - 18)).toISOString().slice(0, 10)} autoComplete="bday" required />
-                <small style={{ display: "block", marginTop: 5, color: "#806b5e", fontSize: 11 }}>Age is checked when you submit the membership request.</small>
               </div>
 
               <div className="form-group">
@@ -4769,10 +5034,6 @@ function AuthModal({
                 >
                   Caste Certificate <span style={{ color: "#b45335" }}>*</span>
                 </label>
-
-                <p style={{ margin: "0 0 10px", color: "#786d62", fontSize: "12px", lineHeight: 1.5 }}>
-                  Upload a certificate for community verification. PDF, JPG or PNG · Maximum 5 MB.
-                </p>
 
                 {!certificateFile ? (
                   <label
@@ -4880,17 +5141,14 @@ function AuthModal({
                   </p>
                 )}
               </div>
-
-              <div className="verification-note">
-                <ShieldCheck size={17} />
-Your membership request will be reviewed before member-only access is activated. Mobile OTP and email verification must be completed when those services are connected.
-              </div>
             </>
           )}
 
-          <button type="submit" className="auth-submit">
-            {mode === "signin" ? "Sign In" : "Submit Membership Request"}
-            <ArrowRight size={17} />
+          {authError && <div role="alert" style={{ margin: "10px 0", padding: "10px 12px", borderRadius: 8, border: "1px solid #f0b8b2", background: "#fff2f0", color: "#a1261c", fontSize: 12, lineHeight: 1.5 }}>{authError}</div>}
+          {authNotice && <div role="status" style={{ margin: "10px 0", padding: "10px 12px", borderRadius: 8, border: "1px solid #c7e4cd", background: "#f0faf2", color: "#216b35", fontSize: 12, lineHeight: 1.5 }}>{authNotice}</div>}
+          <button type="submit" className="auth-submit" disabled={authBusy || (mode === "signup" && !signupOtpVerified)} style={{ opacity: authBusy || (mode === "signup" && !signupOtpVerified) ? 0.65 : 1, cursor: authBusy || (mode === "signup" && !signupOtpVerified) ? "not-allowed" : "pointer" }}>
+            {authBusy ? "Please wait…" : mode === "signin" ? (loginOtpStep ? "Verify OTP & Sign In" : "Continue with Password") : "Submit Membership Request"}
+            {!authBusy && <ArrowRight size={17} />}
           </button>
         </form>
 
@@ -4898,14 +5156,14 @@ Your membership request will be reviewed before member-only access is activated.
           {mode === "signin" ? (
             <>
               Don't have an account?
-              <button type="button" onClick={() => setMode("signup")}>
+              <button type="button" onClick={() => { setMode("signup"); setAuthError(""); setAuthNotice(""); setLoginOtpStep(false); setOtp(""); }}>
                 Sign Up
               </button>
             </>
           ) : (
             <>
               Already have an account?
-              <button type="button" onClick={() => setMode("signin")}>
+              <button type="button" onClick={() => { setMode("signin"); setAuthError(""); setAuthNotice(""); setSignupOtpSent(false); setSignupOtpVerified(false); setPhoneVerificationToken(""); setOtp(""); }}>
                 Sign In
               </button>
             </>
