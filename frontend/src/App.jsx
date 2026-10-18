@@ -46,15 +46,53 @@ import {
 } from "lucide-react";
 
 // Authentication endpoints must be implemented by your secure backend.
-const AUTH_API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://localhost:5000").replace(/\/$/, "");
+const AUTH_API_BASE = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(/\/$/, "");
 
 async function authApi(path, options = {}) {
+  const token =
+    sessionStorage.getItem("potterCommunityAccessToken") ||
+    localStorage.getItem("token");
+
+  const headers = {
+    ...(options.body instanceof FormData
+      ? {}
+      : { "Content-Type": "application/json" }),
+    ...(options.headers || {}),
+  };
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
   const response = await fetch(`${AUTH_API_BASE}${path}`, {
     ...options,
-    headers: { ...(options.body instanceof FormData ? {} : { "Content-Type": "application/json" }), ...(options.headers || {}) },
+    headers,
   });
+
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.message || payload.error || "Request failed. Please try again.");
+
+  if (!response.ok) {
+    const detail = payload.detail;
+
+    let errorMessage = "Request failed. Please try again.";
+
+    if (typeof detail === "string") {
+      errorMessage = detail;
+    } else if (Array.isArray(detail)) {
+      errorMessage = detail
+        .map((item) => item?.msg || JSON.stringify(item))
+        .join(", ");
+    } else if (detail && typeof detail === "object") {
+      errorMessage = detail.message || JSON.stringify(detail);
+    } else if (typeof payload.message === "string") {
+      errorMessage = payload.message;
+    } else if (typeof payload.error === "string") {
+      errorMessage = payload.error;
+    }
+
+    throw new Error(errorMessage);
+  }
+
   return payload;
 }
 
@@ -382,22 +420,22 @@ const ROLE_DASHBOARD_CONFIG = {
   "Super Admin": {
     title: "Super Admin Dashboard",
     description: "Community-wide oversight and administration.",
-    actions: [{ label: "Members", page: "members" }, { label: "Payments & Fees", page: "payments" }, { label: "Events", page: "events" }, { label: "Announcements", page: "announcements" }],
+    actions: [{ label: "Members", page: "members" }, { label: "Committee & Roles", page: "committee-roles" }, { label: "Payments & Fees", page: "payments" }, { label: "Events", page: "events" }, { label: "Announcements", page: "announcements" }, { label: "Official records", page: "community-records" }],
   },
   "Admin": {
     title: "Admin Dashboard",
     description: "Manage community operations and member services.",
-    actions: [{ label: "Members", page: "members" }, { label: "Announcements", page: "announcements" }, { label: "Events", page: "events" }, { label: "Documents", page: "documents" }],
+    actions: [{ label: "Members", page: "members" }, { label: "Committee & Roles", page: "committee-roles" }, { label: "Announcements", page: "announcements" }, { label: "Events", page: "events" }, { label: "Documents", page: "documents" }, { label: "Official records", page: "community-records" }],
   },
   "President / Head": {
     title: "President Dashboard",
     description: "Oversee community activities, leadership, and key updates.",
-    actions: [{ label: "Members", page: "members" }, { label: "Events", page: "events" }, { label: "Announcements", page: "announcements" }, { label: "Payments & Fees", page: "payments" }],
+    actions: [{ label: "Members", page: "members" }, { label: "Events", page: "events" }, { label: "Announcements", page: "announcements" }, { label: "Payments & Fees", page: "payments" }, { label: "Official records", page: "community-records" }],
   },
   "Secretary": {
     title: "Secretary Dashboard",
     description: "Coordinate records, announcements, and community events.",
-    actions: [{ label: "Documents", page: "documents" }, { label: "Announcements", page: "announcements" }, { label: "Events", page: "events" }, { label: "Members", page: "members" }],
+    actions: [{ label: "Official records", page: "community-records" }, { label: "Announcements", page: "announcements" }, { label: "Events", page: "events" }, { label: "Members", page: "members" }],
   },
   "Treasurer": {
     title: "Treasurer Dashboard",
@@ -467,7 +505,7 @@ function normalizeCommunityRole(role) {
     "legal grievance coordinator": "Legal Grievance Coordinator",
     "legal & grievance coordinator": "Legal Grievance Coordinator",
   };
-  return aliases[value] || Object.keys(ROLE_DASHBOARD_CONFIG).find((name) => name.toLowerCase() === value) || "General Member";
+  return aliases[value] || Object.keys(ROLE_DASHBOARD_CONFIG).find((name) => name.toLowerCase() === value) || String(role || "General Member").trim();
 }
 
 function App() {
@@ -485,6 +523,207 @@ function App() {
   const [memberPrompt, setMemberPrompt] = useState(false);
   const [cart, setCart] = useState([]);
   const [search, setSearch] = useState("");
+  const [pendingMemberships, setPendingMemberships] = useState([]);
+  const [memberDirectory, setMemberDirectory] = useState([]);
+  const [memberDirectoryLoading, setMemberDirectoryLoading] = useState(false);
+  const [memberDirectorySearch, setMemberDirectorySearch] = useState("");
+  const [membershipLoading, setMembershipLoading] = useState(false);
+  const [membershipError, setMembershipError] = useState("");
+  const [membershipActionLoading, setMembershipActionLoading] = useState(null);
+  const [reviewingMembership, setReviewingMembership] = useState(null);
+  const [reviewDetailsLoading, setReviewDetailsLoading] = useState(false);
+  const [reviewDetailsError, setReviewDetailsError] = useState("");
+  const [documentRequestStatus, setDocumentRequestStatus] = useState("");
+  const [documentRequestBusy, setDocumentRequestBusy] = useState(false);
+  const [documentReviewBusy, setDocumentReviewBusy] = useState(null);
+
+  useEffect(() => {
+    const token = sessionStorage.getItem("potterCommunityAccessToken") || localStorage.getItem("token");
+    if (!token || sessionStorage.getItem("potterCommunityDemoMode") === "true") return undefined;
+
+    let cancelled = false;
+    const restoreSession = async () => {
+      try {
+        const user = await authApi("/auth/me");
+        if (cancelled) return;
+        const role = normalizeCommunityRole(user.role || "General Member");
+        const restoredUser = { ...user, role };
+        sessionStorage.setItem("potterCommunityAccessToken", token);
+        sessionStorage.setItem("potterCommunityUser", JSON.stringify(restoredUser));
+        setActiveUser(restoredUser);
+        setActiveRole(role);
+        setAuthenticated(true);
+        setCurrentPage(role === "ADMIN" ? "members" : "dashboard");
+      } catch {
+        if (cancelled) return;
+        sessionStorage.removeItem("potterCommunityAccessToken");
+        sessionStorage.removeItem("potterCommunityUser");
+        localStorage.removeItem("token");
+        setActiveUser(null);
+        setAuthenticated(false);
+      }
+    };
+    restoreSession();
+    return () => { cancelled = true; };
+  }, []);
+
+  const loadPendingMemberships = async () => {
+    setMembershipLoading(true);
+    setMembershipError("");
+
+    try {
+      const data = await authApi("/auth/admin/memberships/pending");
+      setPendingMemberships(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error("Failed to load pending memberships:", error);
+      setMembershipError(error.message || "Could not load membership requests.");
+    } finally {
+      setMembershipLoading(false);
+    }
+  };
+
+  const loadMemberDirectory = async () => {
+    if (!authenticated) return;
+    setMemberDirectoryLoading(true);
+    try {
+      const rows = await authApi("/auth/admin/members");
+      setMemberDirectory(Array.isArray(rows) ? rows : []);
+    } catch (error) {
+      console.error("Failed to load member directory:", error);
+    } finally {
+      setMemberDirectoryLoading(false);
+    }
+  };
+
+  const setMemberActivation = async (member, isActive) => {
+    try {
+      await authApi(`/auth/admin/members/${member.id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ is_active: isActive }),
+      });
+      await loadMemberDirectory();
+    } catch (error) {
+      alert(error.message || "Could not update member access.");
+    }
+  };
+
+  const handleMembershipAction = async (userId, action) => {
+    setMembershipActionLoading(`${action}-${userId}`);
+
+    try {
+      const remark = action === "reject" ? window.prompt("Add the reason for rejecting this membership request.") : null;
+      if (action === "reject" && (!remark || remark.trim().length < 3)) return;
+      await authApi(
+        `/auth/admin/memberships/${userId}/${action}`,
+        { method: "PATCH", ...(remark ? { body: JSON.stringify({ remark: remark.trim() }) } : {}) }
+      );
+
+      await loadPendingMemberships();
+      if (reviewingMembership?.id === userId) setReviewingMembership(null);
+    } catch (error) {
+      console.error(`Failed to ${action} membership:`, error);
+      alert(error.message || `Failed to ${action} membership.`);
+    } finally {
+      setMembershipActionLoading(null);
+    }
+  };
+
+  const forwardMembership = async (userId, nextStage) => {
+    const endpoint = nextStage === "verification" ? "forward-to-verification" : "forward-to-president";
+    setMembershipActionLoading(`${nextStage}-${userId}`);
+    try {
+      await authApi(`/auth/admin/memberships/${userId}/${endpoint}`, { method: "POST" });
+      await loadPendingMemberships();
+      await viewMembershipApplication(userId);
+    } catch (error) {
+      alert(error.message || "Could not forward this application.");
+    } finally { setMembershipActionLoading(null); }
+  };
+
+  const viewMembershipApplication = async (userId) => {
+    setReviewDetailsLoading(true);
+    setReviewDetailsError("");
+    setDocumentRequestStatus("");
+    setReviewingMembership(null);
+    try {
+      const details = await authApi(`/auth/admin/memberships/${userId}`);
+      setReviewingMembership(details);
+    } catch (error) {
+      setReviewDetailsError(error.message || "Could not load the application details.");
+    } finally {
+      setReviewDetailsLoading(false);
+    }
+  };
+
+  const requestMembershipDocuments = async () => {
+    if (!reviewingMembership?.id) return;
+    setDocumentRequestBusy(true);
+    setDocumentRequestStatus("");
+    try {
+      const result = await authApi(`/auth/admin/memberships/${reviewingMembership.id}/request-documents`, { method: "POST" });
+      setDocumentRequestStatus(result.message || "The member was asked to resubmit their documents.");
+    } catch (error) {
+      setDocumentRequestStatus(error.message || "Could not request documents.");
+    } finally {
+      setDocumentRequestBusy(false);
+    }
+  };
+
+  const reviewApplicationDocument = async (documentId, status) => {
+    if (!reviewingMembership?.id) return;
+    setDocumentReviewBusy(documentId);
+    setDocumentRequestStatus("");
+    try {
+      await authApi(`/verification/${documentId}/review`, {
+        method: "PATCH",
+        body: JSON.stringify({ status, admin_remark: null }),
+      });
+      setDocumentRequestStatus(`Document ${status.toLowerCase()}.`);
+      await viewMembershipApplication(reviewingMembership.id);
+      await loadPendingMemberships();
+    } catch (error) {
+      setDocumentRequestStatus(error.message || "Could not update document review.");
+    } finally {
+      setDocumentReviewBusy(null);
+    }
+  };
+
+  const openMembershipDocument = async (membershipDocument) => {
+    const token = sessionStorage.getItem("potterCommunityAccessToken") || localStorage.getItem("token");
+    try {
+      const response = await fetch(`${AUTH_API_BASE}${membershipDocument.download_url}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!response.ok) throw new Error("The document could not be opened.");
+      const blobUrl = URL.createObjectURL(await response.blob());
+      const link = window.document.createElement("a");
+      link.href = blobUrl;
+      link.download = `${membershipDocument.document_type || "member-document"}`;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    } catch (error) {
+      alert(error.message || "The document could not be opened.");
+    }
+  };
+
+  useEffect(() => {
+    if (
+      authenticated &&
+      (String(activeUser?.role || "").toUpperCase() === "ADMIN" || activeUser?.permissions?.includes("membership.review") || activeUser?.permissions?.includes("community.approve"))
+    ) {
+      loadPendingMemberships();
+    }
+  }, [authenticated, activeUser?.role, activeUser?.permissions]);
+
+  useEffect(() => {
+    if (authenticated && (
+      String(activeUser?.role || "").toUpperCase() === "ADMIN"
+      || activeUser?.permissions?.includes("membership.view")
+      || activeUser?.permissions?.includes("members.manage")
+    )) loadMemberDirectory();
+  }, [authenticated, activeUser?.role, activeUser?.permissions]);
 
   const openMemberFeature = (page) => {
     if (!authenticated) {
@@ -514,6 +753,7 @@ function App() {
     sessionStorage.removeItem("potterCommunityAccessToken");
     sessionStorage.removeItem("potterCommunityUser");
     sessionStorage.removeItem("potterCommunityDemoMode");
+    localStorage.removeItem("token");
     setActiveUser(null);
     setActiveRole("General Member");
     setAuthenticated(false);
@@ -525,6 +765,21 @@ function App() {
     setCart((previousCart) => [...previousCart, product]);
   };
 
+  const membershipReviewStage = reviewingMembership?.review_stage || "ADMIN_REVIEW";
+  const isPlatformAdmin = String(activeUser?.role || "").toUpperCase() === "ADMIN";
+  const isSuperAdmin = String(activeUser?.role || "").toUpperCase() === "SUPER ADMIN";
+  const canReviewDocuments = isPlatformAdmin || isSuperAdmin || activeUser?.permissions?.includes("documents.review");
+  const canForwardToVerification = (isPlatformAdmin || isSuperAdmin) && membershipReviewStage === "ADMIN_REVIEW";
+  const canForwardToPresident = !isPlatformAdmin && canReviewDocuments && membershipReviewStage === "VERIFICATION_OFFICER_REVIEW";
+  const canApproveMembership = (isSuperAdmin || (!isPlatformAdmin && activeUser?.permissions?.includes("community.approve"))) && membershipReviewStage === "PRESIDENT_REVIEW";
+  const allMembershipDocumentsApproved = Boolean(reviewingMembership?.documents?.length)
+    && reviewingMembership.documents.every((document) => document.status === "APPROVED");
+  const canRejectMembership = membershipReviewStage === "ADMIN_REVIEW"
+    ? isPlatformAdmin || isSuperAdmin
+    : membershipReviewStage === "VERIFICATION_OFFICER_REVIEW"
+      ? !isPlatformAdmin && canReviewDocuments
+      : (isSuperAdmin || (!isPlatformAdmin && activeUser?.permissions?.includes("community.approve")));
+
   return (
     <div className="app">
       {authenticated && (
@@ -534,6 +789,7 @@ function App() {
           logout={logout}
           sidebarOpen={sidebarOpen}
           setSidebarOpen={setSidebarOpen}
+          activeUser={activeUser}
         />
       )}
 
@@ -571,6 +827,20 @@ function App() {
             navigate={navigate}
             activeRole={activeRole}
             activeUser={activeUser}
+            pendingMemberships={pendingMemberships}
+            membershipLoading={membershipLoading}
+            membershipError={membershipError}
+            membershipActionLoading={membershipActionLoading}
+            memberDirectory={memberDirectory}
+            memberDirectoryLoading={memberDirectoryLoading}
+            memberDirectorySearch={memberDirectorySearch}
+            setMemberDirectorySearch={setMemberDirectorySearch}
+            loadMemberDirectory={loadMemberDirectory}
+            setMemberActivation={setMemberActivation}
+            loadPendingMemberships={loadPendingMemberships}
+            handleMembershipAction={handleMembershipAction}
+            forwardMembership={forwardMembership}
+            viewMembershipApplication={viewMembershipApplication}
             search={search}
             setSearch={setSearch}
             addToCart={addToCart}
@@ -584,19 +854,77 @@ function App() {
           type={authModal}
           close={() => setAuthModal(null)}
           onAuthenticated={(role, user) => {
-            const assignedRole = normalizeCommunityRole(role || user?.role || "General Member");
+            const rawRole = role || user?.role || "General Member";
+            console.log("AUTH ROLE DEBUG:", {
+              roleFromLogin: role,
+              roleFromUser: user?.role,
+              rawRole,
+              normalizedRole: normalizeCommunityRole(rawRole),
+            });
+
+            const assignedRole = normalizeCommunityRole(rawRole);
             setActiveRole(assignedRole);
             setActiveUser(user || null);
-            try { if (user) sessionStorage.setItem("potterCommunityUser", JSON.stringify({ ...user, role: assignedRole })); } catch {}
+
+            try {
+              if (user) {
+                sessionStorage.setItem(
+                  "potterCommunityUser",
+                  JSON.stringify({ ...user, role: assignedRole })
+                );
+              }
+            } catch {}
+
             setAuthenticated(true);
             setAuthModal(null);
-            setCurrentPage("dashboard");
+
+            // Keep the page in sync with the logged-in user.
+            // Admins should be able to open Member Directory directly.
+            if (assignedRole === "ADMIN") {
+              setCurrentPage("members");
+            } else {
+              setCurrentPage("dashboard");
+            }
           }}
           onRegistered={() => {
             setAuthModal(null);
             setVerificationPending(true);
           }}
         />
+      )}
+
+      {(reviewDetailsLoading || reviewDetailsError || reviewingMembership) && (
+        <div className="modal-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) { setReviewingMembership(null); setReviewDetailsError(""); } }}>
+          <section className="auth-modal" role="dialog" aria-modal="true" aria-label="Membership application details" style={{ width: "min(760px, calc(100vw - 32px))", maxWidth: 760, maxHeight: "calc(100dvh - 32px)", overflowY: "auto", padding: 24 }}>
+            <button className="modal-close" type="button" onClick={() => { setReviewingMembership(null); setReviewDetailsError(""); }} aria-label="Close application details">×</button>
+            {reviewDetailsLoading ? <p>Loading application details…</p> : reviewDetailsError ? <p role="alert">{reviewDetailsError}</p> : reviewingMembership && <>
+              <h2 style={{ marginTop: 0 }}>Application details</h2>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+                {[
+                  ["Full name", reviewingMembership.full_name],
+                  ["Phone", reviewingMembership.phone_number],
+                  ["Email", reviewingMembership.email],
+                  ["Phone verification", reviewingMembership.phone_verified ? "Verified" : "Not verified"],
+                  ["Date of birth", reviewingMembership.application_details?.date_of_birth],
+                  ["Gender", reviewingMembership.application_details?.gender],
+                  ["Blood group", reviewingMembership.application_details?.blood_group],
+                  ["Permanent address", reviewingMembership.application_details?.permanent_address],
+                  ["Correspondence address", reviewingMembership.application_details?.correspondence_address],
+                ].map(([label, value]) => <div key={label} style={{ padding: 12, border: "1px solid #ead8cc", borderRadius: 10 }}><small style={{ color: "#806b5e" }}>{label}</small><div style={{ marginTop: 4, overflowWrap: "anywhere" }}>{value || "Not provided"}</div></div>)}
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 22 }}><h3 style={{ margin: 0 }}>Submitted documents</h3><button type="button" className="btn btn-outline" onClick={() => viewMembershipApplication(reviewingMembership.id)} disabled={reviewDetailsLoading}>Refresh application</button></div>
+            <p style={{ color: "#806b5e", fontSize: 12 }}>Review stage: {membershipReviewStage.replaceAll("_", " ")}</p>
+            {reviewingMembership.documents?.length ? <div style={{ display: "grid", gap: 8, marginTop: 10 }}>{reviewingMembership.documents.map((document) => <div key={document.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", border: "1px solid #ead8cc", borderRadius: 10, padding: 12 }}><div><strong>{document.document_type}</strong><div style={{ color: "#806b5e", fontSize: 12 }}>Status: {document.status} · Submitted {document.created_at ? new Date(document.created_at).toLocaleString() : "date unavailable"}</div></div><div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{canReviewDocuments && <button type="button" className="btn btn-outline" onClick={() => openMembershipDocument(document)}>View / download</button>}{canReviewDocuments && document.status === "PENDING" && <><button type="button" className="btn btn-primary" onClick={() => reviewApplicationDocument(document.id, "APPROVED")} disabled={documentReviewBusy !== null}>{documentReviewBusy === document.id ? "Saving…" : "Approve document"}</button><button type="button" className="btn btn-outline" onClick={() => reviewApplicationDocument(document.id, "REJECTED")} disabled={documentReviewBusy !== null}>Reject</button></>}</div></div>)}</div> : <div style={{ marginTop: 10, padding: 12, border: "1px solid #f0d8c9", borderRadius: 10, background: "#fff8f2" }}><p style={{ margin: "0 0 10px", color: "#806b5e" }}>No uploaded document records are attached to this application in the server. Ask the member to resubmit their files; then refresh this application.</p>{(isPlatformAdmin || activeUser?.permissions?.includes("membership.review")) && <button type="button" className="btn btn-outline" onClick={requestMembershipDocuments} disabled={documentRequestBusy}>{documentRequestBusy ? "Sending request…" : "Ask member to resubmit documents"}</button>}{documentRequestStatus && <p role="status" style={{ margin: "9px 0 0", color: "#39734a", fontSize: 12 }}>{documentRequestStatus}</p>}</div>}
+              {documentRequestStatus && reviewingMembership.documents?.length > 0 && <p role="status" style={{ margin: "9px 0 0", color: "#39734a", fontSize: 12 }}>{documentRequestStatus}</p>}
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap", marginTop: 22, paddingTop: 16, borderTop: "1px solid #ead8cc" }}>
+                {canRejectMembership && <button type="button" className="btn btn-outline" onClick={() => handleMembershipAction(reviewingMembership.id, "reject")} disabled={membershipActionLoading !== null}>{membershipActionLoading === `reject-${reviewingMembership.id}` ? "Rejecting…" : "Reject application"}</button>}
+                {canForwardToVerification && <button type="button" className="btn btn-primary" onClick={() => forwardMembership(reviewingMembership.id, "verification")} disabled={membershipActionLoading !== null || !allMembershipDocumentsApproved}>{membershipActionLoading === `verification-${reviewingMembership.id}` ? "Forwarding…" : "Forward to Verification Officer"}</button>}
+                {canForwardToPresident && <button type="button" className="btn btn-primary" onClick={() => forwardMembership(reviewingMembership.id, "president")} disabled={membershipActionLoading !== null || !allMembershipDocumentsApproved}>{membershipActionLoading === `president-${reviewingMembership.id}` ? "Forwarding…" : "Forward to President"}</button>}
+                {canApproveMembership && <button type="button" className="btn btn-primary" onClick={() => handleMembershipAction(reviewingMembership.id, "approve")} disabled={membershipActionLoading !== null}>{membershipActionLoading === `approve-${reviewingMembership.id}` ? "Approving…" : "Approve membership"}</button>}
+              </div>
+            </>}
+          </section>
+        </div>
       )}
 
       {verificationPending && (
@@ -633,7 +961,7 @@ function Header({
     try {
       return getStoredProfile();
     } catch {
-      return { fullName: "Suraj Kumar", profilePhoto: "" };
+      return { fullName: "", profilePhoto: "" };
     }
   });
 
@@ -777,7 +1105,11 @@ function Sidebar({
   logout,
   sidebarOpen,
   setSidebarOpen,
+  activeUser,
 }) {
+  const canManageRoles = String(activeUser?.role || "").toUpperCase() === "ADMIN"
+    || String(activeUser?.role || "").toUpperCase() === "SUPER ADMIN"
+    || activeUser?.permissions?.includes("roles.manage");
   const menu = [
     {
       title: "Main",
@@ -797,6 +1129,11 @@ function Sidebar({
           label: "Announcements",
           icon: Megaphone,
           page: "announcements",
+        },
+        {
+          label: "Meetings & Minutes",
+          icon: FileText,
+          page: "community-records",
         },
         {
           label: "Events",
@@ -877,6 +1214,17 @@ function Sidebar({
         },
       ],
     },
+    {
+      title: "Administration",
+      items: [
+        {
+          label: "Committee & Roles",
+          icon: Users,
+          page: "committee-roles",
+          member: true,
+        },
+      ],
+    },
   ];
 
   return (
@@ -900,7 +1248,7 @@ function Sidebar({
         </div>
 
         <div className="sidebar-content">
-          {menu.map((section) => (
+          {menu.filter((section) => section.title !== "Administration" || canManageRoles).map((section) => (
             <div
               className="sidebar-section"
               key={section.title}
@@ -914,7 +1262,7 @@ function Sidebar({
 
                 return (
                   <button
-                    key={item.page}
+                    key={`${item.label}-${item.page}`}
                     className={`sidebar-item ${
                       currentPage === item.page
                         ? "active"
@@ -1322,80 +1670,104 @@ function MemberContent({
   navigate,
   activeRole,
   activeUser,
+  pendingMemberships,
+  membershipLoading,
+  membershipError,
+  membershipActionLoading,
+  memberDirectory = [],
+  memberDirectoryLoading = false,
+  memberDirectorySearch = "",
+  setMemberDirectorySearch = () => {},
+  loadMemberDirectory = () => {},
+  setMemberActivation = () => {},
+  loadPendingMemberships,
+  handleMembershipAction,
+  forwardMembership,
+  viewMembershipApplication,
   search,
   setSearch,
   addToCart,
   cart,
 }) {
   const [schemeScope, setSchemeScope] = useState("National");
-  const [scholarshipScope, setScholarshipScope] = useState("National");
-  const [communityEvents, setCommunityEvents] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem("potter-community-events") || "[]");
-    } catch {
-      return [];
-    }
-  });
+  const [communityEvents, setCommunityEvents] = useState([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [eventsBusy, setEventsBusy] = useState(false);
   const [showEventForm, setShowEventForm] = useState(false);
   const [eventNotice, setEventNotice] = useState("");
   const [eventDraft, setEventDraft] = useState({
     title: "", description: "", announcement: "", date: "", time: "", venue: "", registrationEnabled: true,
   });
   const [eventHistoryFilter, setEventHistoryFilter] = useState("All");
-  const organizerRoles = ["Super Admin", "Admin", "President / Head", "Secretary", "Treasurer", "Director", "Nominated Director", "Event Coordinator"];
-  const canManageEvents = organizerRoles.includes(activeRole || "General Member");
+  const canManageEvents = String(activeUser?.role || "").toUpperCase() === "ADMIN"
+    || String(activeUser?.role || "").toUpperCase() === "SUPER ADMIN"
+    || activeUser?.permissions?.includes("events.manage");
+  const canApproveEvents = String(activeUser?.role || "").toUpperCase() === "SUPER ADMIN"
+    || activeUser?.permissions?.includes("community.approve");
   const currentMemberName = (() => {
     try {
       const stored = JSON.parse(localStorage.getItem("potterProfile") || "{}");
-      return stored.fullName || stored.name || "Current member";
+      return activeUser?.full_name || stored.fullName || stored.name || "Current member";
     } catch {
       return "Current member";
     }
   })();
-  const saveCommunityEvents = (nextEvents) => {
-    setCommunityEvents(nextEvents);
-    try { localStorage.setItem("potter-community-events", JSON.stringify(nextEvents)); } catch {}
+  const loadCommunityEvents = async () => {
+    setEventsLoading(true);
+    try {
+      const rows = await authApi("/events");
+      setCommunityEvents(Array.isArray(rows) ? rows : []);
+    } catch (loadError) {
+      setEventNotice(loadError.message || "Could not load events.");
+    } finally { setEventsLoading(false); }
   };
-  const createCommunityEvent = (e) => {
+  useEffect(() => { loadCommunityEvents(); }, []);
+  const createCommunityEvent = async (e) => {
     e.preventDefault();
     if (!canManageEvents) return;
     if (!eventDraft.title.trim() || !eventDraft.description.trim() || !eventDraft.date || !eventDraft.time || !eventDraft.venue.trim()) {
       setEventNotice("Complete the event title, description, date, time, and venue before publishing.");
       return;
     }
-    const created = {
-      id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      ...eventDraft,
-      title: eventDraft.title.trim(), description: eventDraft.description.trim(), venue: eventDraft.venue.trim(),
-      published: true,
-      createdAt: new Date().toISOString(),
-      createdBy: currentMemberName,
-      registrations: [],
-      attendance: {},
-    };
-    saveCommunityEvents([created, ...communityEvents]);
-    setEventDraft({ title: "", description: "", announcement: "", date: "", time: "", venue: "", registrationEnabled: true });
-    setShowEventForm(false);
-    setEventNotice("Event published. Members can now view the event details" + (created.registrationEnabled ? " and register." : "."));
+    setEventsBusy(true);
+    try {
+      await authApi("/events", { method: "POST", body: JSON.stringify({ title: eventDraft.title.trim(), description: eventDraft.description.trim(), announcement: eventDraft.announcement.trim() || null, date: eventDraft.date, time: eventDraft.time, venue: eventDraft.venue.trim(), registration_enabled: eventDraft.registrationEnabled }) });
+      setEventDraft({ title: "", description: "", announcement: "", date: "", time: "", venue: "", registrationEnabled: true });
+      setShowEventForm(false);
+      setEventNotice("Event sent to the President for approval. It will appear to members after approval.");
+      await loadCommunityEvents();
+    } catch (createError) { setEventNotice(createError.message || "Could not submit the event."); }
+    finally { setEventsBusy(false); }
   };
-  const registerForEvent = (eventId) => {
-    const next = communityEvents.map((item) => {
-      if (item.id !== eventId || !item.registrationEnabled) return item;
-      const registrations = item.registrations || [];
-      if (registrations.some((entry) => entry.name === currentMemberName)) return item;
-      return { ...item, registrations: [...registrations, { name: currentMemberName, registeredAt: new Date().toISOString() }] };
-    });
-    saveCommunityEvents(next);
-    setEventNotice("Your registration has been recorded. Attendance will be counted only after an authorized check-in.");
+  const registerForEvent = async (eventId) => {
+    setEventsBusy(true);
+    try {
+      await authApi(`/events/${eventId}/registrations`, { method: "POST" });
+      setEventNotice("Your registration has been recorded. Attendance will be counted only after an authorized check-in.");
+      await loadCommunityEvents();
+    } catch (registerError) { setEventNotice(registerError.message || "Could not register for this event."); }
+    finally { setEventsBusy(false); }
   };
-  const updateAttendance = (eventId, memberName, status) => {
+  const updateAttendance = async (eventId, memberId, memberName, status) => {
     if (!canManageEvents) return;
-    const next = communityEvents.map((item) => item.id === eventId ? {
-      ...item,
-      attendance: { ...(item.attendance || {}), [memberName]: { status, markedAt: new Date().toISOString(), markedBy: currentMemberName } },
-    } : item);
-    saveCommunityEvents(next);
-    setEventNotice(`Attendance marked ${status.toLowerCase()} for ${memberName}.`);
+    setEventsBusy(true);
+    try {
+      await authApi(`/events/${eventId}/attendance/${memberId}`, { method: "PATCH", body: JSON.stringify({ status: status.toUpperCase() }) });
+      setEventNotice(`Attendance marked ${status.toLowerCase()} for ${memberName}.`);
+      await loadCommunityEvents();
+    } catch (attendanceError) { setEventNotice(attendanceError.message || "Could not update attendance."); }
+    finally { setEventsBusy(false); }
+  };
+  const decideEvent = async (eventId, action) => {
+    const remark = action === "REJECT" ? window.prompt("Please provide a short reason for rejecting this event.") : window.prompt("Approval note (optional):");
+    if (action === "REJECT" && !remark?.trim()) return;
+    setEventsBusy(true);
+    try {
+      await authApi(`/events/${eventId}/decision`, { method: "PATCH", body: JSON.stringify({ action, remark: remark?.trim() || null }) });
+      setEventNotice(action === "APPROVE" ? "Event approved and published." : "Event rejected.");
+      await loadCommunityEvents();
+    } catch (decisionError) { setEventNotice(decisionError.message || "Could not review this event."); }
+    finally { setEventsBusy(false); }
   };
   const registeredEvents = communityEvents.filter((item) => (item.registrations || []).some((entry) => entry.name === currentMemberName));
   const attendedEvents = registeredEvents.filter((item) => item.attendance?.[currentMemberName]?.status === "Attended");
@@ -1434,9 +1806,14 @@ function MemberContent({
     );
   }
 
+  if (currentPage === "community-records") {
+    return <CommunityRecordsPage activeUser={activeUser} />;
+  }
+
   if (currentPage === "events") {
     const today = new Date().toISOString().slice(0, 10);
-    const upcomingEvents = communityEvents.filter((item) => item.date >= today).sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
+    const upcomingEvents = communityEvents.filter((item) => item.status === "PUBLISHED" && item.date >= today).sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
+    const pendingEvents = communityEvents.filter((item) => item.status === "PENDING_APPROVAL");
     return (
       <PageWrapper>
         <style>{`
@@ -1445,7 +1822,7 @@ function MemberContent({
         <div className="pc-event-page">
           <div className="pc-event-intro">
             <div><span className="pc-event-kicker">COMMUNITY & CONNECTION</span><h1>Events and Community Activities</h1><p>Discover upcoming gatherings, register for activities, and keep a record of your participation.</p></div>
-            {canManageEvents && <button className="pc-event-btn" onClick={() => { setShowEventForm((v) => !v); setEventNotice(""); }}><Plus size={16}/>{showEventForm ? "Close event form" : "Create an event"}</button>}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}><button className="pc-event-btn secondary" type="button" onClick={loadCommunityEvents} disabled={eventsLoading}>{eventsLoading ? "Refreshing…" : "Refresh"}</button>{canManageEvents && <button className="pc-event-btn" onClick={() => { setShowEventForm((v) => !v); setEventNotice(""); }}><Plus size={16}/>{showEventForm ? "Close event form" : "Create an event"}</button>}</div>
           </div>
           <div className="pc-event-stats">
             <div className="pc-event-stat"><span>Upcoming events</span><strong>{upcomingEvents.length}</strong></div>
@@ -1454,7 +1831,7 @@ function MemberContent({
             <div className="pc-event-stat"><span>Marked absent</span><strong>{absentEvents.length}</strong></div>
           </div>
           {eventNotice && <div className="pc-event-notice" role="status">{eventNotice}</div>}
-          {showEventForm && canManageEvents && <section className="pc-event-panel"><div className="pc-event-panel-head"><div><h2>Publish a community event</h2><p>Provide the date, time, venue, and details before publishing.</p></div><span className="pc-event-status"><ShieldCheck size={13}/> Organizer access</span></div><form className="pc-event-form" onSubmit={createCommunityEvent}>
+          {showEventForm && canManageEvents && <section className="pc-event-panel"><div className="pc-event-panel-head"><div><h2>Propose a community event</h2><p>After submission, the President reviews it before members can see it.</p></div><span className="pc-event-status"><ShieldCheck size={13}/> Organizer access</span></div><form className="pc-event-form" onSubmit={createCommunityEvent}>
             <label>Event title<input value={eventDraft.title} onChange={(e)=>setEventDraft({...eventDraft,title:e.target.value})} placeholder="e.g. Community pottery workshop" required maxLength={100}/></label>
             <label>Venue<input value={eventDraft.venue} onChange={(e)=>setEventDraft({...eventDraft,venue:e.target.value})} placeholder="Enter venue or online meeting details" required maxLength={160}/></label>
             <label>Date<input type="date" value={eventDraft.date} min={today} onChange={(e)=>setEventDraft({...eventDraft,date:e.target.value})} required/></label>
@@ -1462,10 +1839,11 @@ function MemberContent({
             <label className="wide">Event announcement (optional)<textarea value={eventDraft.announcement} onChange={(e)=>setEventDraft({...eventDraft,announcement:e.target.value})} placeholder="Add a short announcement for members" maxLength={600}/></label>
             <label className="wide">Event details<textarea value={eventDraft.description} onChange={(e)=>setEventDraft({...eventDraft,description:e.target.value})} placeholder="Describe the event and who can attend" required maxLength={1200}/></label>
             <label className="pc-event-check wide"><input type="checkbox" checked={eventDraft.registrationEnabled} onChange={(e)=>setEventDraft({...eventDraft,registrationEnabled:e.target.checked})}/> Enable member registration for this event</label>
-            <div className="wide"><button className="pc-event-btn" type="submit"><Check size={15}/> Publish event</button></div>
+            <div className="wide"><button className="pc-event-btn" type="submit" disabled={eventsBusy}><Check size={15}/> {eventsBusy ? "Submitting…" : "Submit for approval"}</button></div>
           </form></section>}
+          {canApproveEvents && pendingEvents.length > 0 && <section className="pc-event-panel"><div className="pc-event-panel-head"><div><h2>Events awaiting approval</h2><p>Approve an event before it appears to members.</p></div><span className="pc-event-status">{pendingEvents.length} pending</span></div>{pendingEvents.map((item) => <article key={item.id} className="pc-event-history-row"><div><h3>{item.title}</h3><p>{item.date} at {item.time} · {item.venue} · Proposed by {item.createdBy}</p><p>{item.description}</p></div><div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}><button type="button" className="pc-event-btn" disabled={eventsBusy} onClick={() => decideEvent(item.id, "APPROVE")}>Approve</button><button type="button" className="pc-event-btn secondary" disabled={eventsBusy} onClick={() => decideEvent(item.id, "REJECT")}>Reject</button></div></article>)}</section>}
           <section className="pc-event-panel"><div className="pc-event-panel-head"><div><h2>Upcoming events</h2><p>Only events published by an authorized organizer appear here.</p></div><span className="pc-event-status">{upcomingEvents.length} published</span></div>
-            {upcomingEvents.length ? <div className="pc-event-grid">{upcomingEvents.map((item)=>{const isRegistered=(item.registrations||[]).some((entry)=>entry.name===currentMemberName);const attendance=item.attendance||{};return <article className="pc-event-card" key={item.id}><div className="pc-event-card-top"><div className="pc-event-datebox"><div className="pc-event-date-icon"><CalendarDays size={21}/></div><div><h3>{item.title}</h3><small>Published by {item.createdBy || "Authorized organizer"}</small></div></div><span className="pc-event-status">{item.registrationEnabled ? "Registration open" : "Registration closed"}</span></div><div className="pc-event-card-body"><div className="pc-event-meta"><span><CalendarDays size={13}/>{item.date}</span><span><Clock size={13}/>{item.time}</span><span><MapPin size={13}/>{item.venue}</span></div><p>{item.description}</p>{item.announcement && <div className="pc-event-notice"><strong>Announcement:</strong> {item.announcement}</div>}<div className="pc-event-card-actions">{item.registrationEnabled && <button className="pc-event-btn secondary" disabled={isRegistered} onClick={()=>registerForEvent(item.id)}>{isRegistered ? <><Check size={14}/> Registered</> : <>Register for event <ArrowRight size={14}/></>}</button>}{isRegistered && <span className="pc-event-status green">{attendance[currentMemberName]?.status || "Awaiting check-in"}</span>}{canManageEvents && <span className="pc-event-status">{(item.registrations||[]).length} registrations</span>}</div>{canManageEvents && (item.registrations||[]).length>0 && <div style={{marginTop:14,paddingTop:12,borderTop:"1px solid #f0e3d9"}}><strong style={{fontSize:11}}>Attendance register</strong>{item.registrations.map((entry)=><div key={entry.name} className="pc-event-history-row"><div><h3>{entry.name}</h3><p>Registered {new Date(entry.registeredAt).toLocaleDateString()}</p></div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}><button className="pc-event-btn secondary" onClick={()=>updateAttendance(item.id,entry.name,"Attended")}>Mark attended</button><button className="pc-event-btn secondary" onClick={()=>updateAttendance(item.id,entry.name,"Absent")}>Mark absent</button></div></div>)}</div>}</div></article>})}</div> : <div className="pc-event-empty"><CalendarDays size={28}/><strong>No published events yet</strong></div>}
+            {eventsLoading ? <div className="pc-event-empty">Loading events…</div> : upcomingEvents.length ? <div className="pc-event-grid">{upcomingEvents.map((item)=>{const isRegistered=(item.registrations||[]).some((entry)=>entry.name===currentMemberName);const attendance=item.attendance||{};return <article className="pc-event-card" key={item.id}><div className="pc-event-card-top"><div className="pc-event-datebox"><div className="pc-event-date-icon"><CalendarDays size={21}/></div><div><h3>{item.title}</h3><small>Published by {item.createdBy || "Authorized organizer"}</small></div></div><span className="pc-event-status">{item.registrationEnabled ? "Registration open" : "Registration closed"}</span></div><div className="pc-event-card-body"><div className="pc-event-meta"><span><CalendarDays size={13}/>{item.date}</span><span><Clock size={13}/>{item.time}</span><span><MapPin size={13}/>{item.venue}</span></div><p>{item.description}</p>{item.announcement && <div className="pc-event-notice"><strong>Announcement:</strong> {item.announcement}</div>}<div className="pc-event-card-actions">{item.registrationEnabled && <button className="pc-event-btn secondary" disabled={eventsBusy || isRegistered} onClick={()=>registerForEvent(item.id)}>{isRegistered ? <><Check size={14}/> Registered</> : <>Register for event <ArrowRight size={14}/></>}</button>}{isRegistered && <span className="pc-event-status green">{attendance[currentMemberName]?.status || "Awaiting check-in"}</span>}{canManageEvents && <span className="pc-event-status">{item.registrationCount || 0} registrations</span>}</div>{canManageEvents && (item.registrations||[]).length>0 && <div style={{marginTop:14,paddingTop:12,borderTop:"1px solid #f0e3d9"}}><strong style={{fontSize:11}}>Attendance register</strong>{item.registrations.map((entry)=><div key={entry.user_id} className="pc-event-history-row"><div><h3>{entry.name}</h3><p>Registered {new Date(entry.registeredAt).toLocaleDateString()}</p></div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}><button className="pc-event-btn secondary" disabled={eventsBusy} onClick={()=>updateAttendance(item.id,entry.user_id,entry.name,"Attended")}>Mark attended</button><button className="pc-event-btn secondary" disabled={eventsBusy} onClick={()=>updateAttendance(item.id,entry.user_id,entry.name,"Absent")}>Mark absent</button></div></div>)}</div>}</div></article>})}</div> : <div className="pc-event-empty"><CalendarDays size={28}/><strong>No published events yet</strong></div>}
           </section>
           <section className="pc-event-panel"><div className="pc-event-panel-head"><div><h2>My event history</h2><p>Registration is not counted as attendance until an authorized organizer verifies check-in.</p></div><select className="pc-event-select" value={eventHistoryFilter} onChange={(e)=>setEventHistoryFilter(e.target.value)}><option>All</option><option>Awaiting check-in</option><option>Attended</option><option>Absent</option></select></div>
             {eventHistory.length ? eventHistory.map((item)=><div className="pc-event-history-row" key={item.id}><div><h3>{item.title}</h3><p>{item.date} at {item.time} · {item.venue}</p><p>Registered on {new Date((item.registrations||[]).find((entry)=>entry.name===currentMemberName)?.registeredAt || item.createdAt).toLocaleDateString()}</p></div><span className={`pc-event-status ${item.attendance?.[currentMemberName]?.status === "Attended" ? "green" : ""}`}>{item.attendance?.[currentMemberName]?.status || "Awaiting check-in"}</span></div>) : <div className="pc-event-empty"><CalendarDays size={24}/><strong>No event history yet</strong></div>}
@@ -1530,57 +1908,7 @@ function MemberContent({
   }
 
   if (currentPage === "scholarships") {
-    return (
-      <PageWrapper>
-        <PageHeader
-          title="Scholarships"
-          description="Explore scholarships and personalized opportunities."
-        />
-
-        <div className="member-service-banner">
-          <div className="banner-icon">
-            <GraduationCap size={22} />
-          </div>
-
-          <div>
-            <strong>
-              Personalized Scholarship Matching
-            </strong>
-
-            <p>
-              Find scholarship opportunities based on your
-              member profile.
-            </p>
-          </div>
-
-          <button className="btn btn-primary">
-            Find Scholarships
-          </button>
-        </div>
-
-        <ScholarshipTypeTabs
-          value={scholarshipScope}
-          onChange={setScholarshipScope}
-          nationalCount={scholarships.filter((item) => item.scope === "National").length}
-          stateCount={scholarships.filter((item) => item.scope === "State").length}
-        />
-
-        {scholarships.filter((item) => item.scope === scholarshipScope).length > 0 ? (
-          <div className="content-grid">
-            {scholarships
-              .filter((item) => item.scope === scholarshipScope)
-              .map((scholarship) => (
-                <ScholarshipCard key={scholarship.id} scholarship={scholarship} />
-              ))}
-          </div>
-        ) : (
-          <EmptyState
-            title={scholarshipScope === "National" ? "No national scholarships currently listed" : "No verified state-specific pottery scholarship listed"}
-            description="We list pottery-relevant scholarships only when an official source confirms the connection. General education scholarships may also be available depending on a person's state, community, income, course and merit."
-          />
-        )}
-      </PageWrapper>
-    );
+    return <ScholarshipPortalPage activeUser={activeUser} />;
   }
 
   if (currentPage === "marketplace") {
@@ -1590,12 +1918,25 @@ function MemberContent({
   if (currentPage === "matrimonial") {
     return (
       <PageWrapper>
-        <MatrimonialPage authenticated />
+        <MatrimonialPage authenticated activeUser={activeUser} />
       </PageWrapper>
     );
   }
 
   if (currentPage === "members") {
+    const canReviewMemberships = String(activeUser?.role || "").toUpperCase() === "ADMIN"
+      || activeUser?.permissions?.includes("membership.review")
+      || activeUser?.permissions?.includes("community.approve");
+    const canViewMembers = String(activeUser?.role || "").toUpperCase() === "ADMIN"
+      || activeUser?.permissions?.includes("membership.view")
+      || activeUser?.permissions?.includes("members.manage");
+    const canManageMembers = String(activeUser?.role || "").toUpperCase() === "ADMIN"
+      || activeUser?.permissions?.includes("members.manage");
+    const visibleMembers = memberDirectory.filter((member) => {
+      const query = memberDirectorySearch.trim().toLowerCase();
+      return (!query || `${member.full_name} ${member.membership_number || ""} ${member.role || ""}`.toLowerCase().includes(query));
+    });
+
     return (
       <PageWrapper>
         <PageHeader
@@ -1603,26 +1944,113 @@ function MemberContent({
           description="Connect with verified Potter Community members."
         />
 
+        {canReviewMemberships && (
+          <div className="membership-admin-section">
+            <div className="section-heading">
+              <div>
+                <h2>Membership Verification</h2>
+                <p>Review applications and move them through document verification and committee approval.</p>
+              </div>
+
+              <button
+                className="btn btn-outline"
+                onClick={loadPendingMemberships}
+                disabled={membershipLoading}
+              >
+                {membershipLoading ? "Refreshing..." : "Refresh"}
+              </button>
+            </div>
+
+            {membershipLoading ? (
+              <div className="empty-state">
+                Loading pending memberships...
+              </div>
+            ) : membershipError ? (
+              <div className="empty-state" role="alert">
+                {membershipError}
+              </div>
+            ) : pendingMemberships.length > 0 ? (
+              <div className="content-grid">
+                {pendingMemberships.map((user) => (
+                  <div className="directory-card" key={user.id}>
+                    <div className="directory-avatar">
+                      {String(user.full_name || "?")
+                        .split(" ")
+                        .map((n) => n[0])
+                        .join("")
+                        .slice(0, 2)
+                        .toUpperCase()}
+                    </div>
+
+                    <div className="directory-info">
+                      <div className="name-line">
+                        <h3>{user.full_name}</h3>
+                      </div>
+
+                      <span>{user.phone_number}</span>
+
+                      {user.email && (
+                        <div className="directory-details">
+                          <span>{user.email}</span>
+                        </div>
+                      )}
+
+                      <div className="directory-details">
+                        <span>
+                          Phone: {user.phone_verified ? "Verified" : "Not verified"}
+                        </span>
+                        <span>
+                          Status: {user.membership_status}
+                        </span>
+                        <span>Stage: {(user.review_stage || "ADMIN_REVIEW").replaceAll("_", " ")}</span>
+                      </div>
+                      <div className="directory-details">
+                        <span>Documents: {user.document_count || 0} uploaded</span>
+                        <span>{user.approved_documents_count || 0} approved</span>
+                      </div>
+
+                      <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+                        <button
+                          type="button"
+                          className="btn btn-outline"
+                          onClick={() => viewMembershipApplication(user.id)}
+                        >
+                          View application
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyState
+                title="No pending membership requests"
+                description="All membership requests have been reviewed."
+              />
+            )}
+          </div>
+        )}
+
+        {(String(activeUser?.role || "").toUpperCase() === "ADMIN" || activeUser?.permissions?.includes("membership.review")) && <FamilyReviewQueue />}
+
         <div className="directory-toolbar">
           <div className="search-box">
             <Search size={18} />
-            <input placeholder="Search members..." />
+            <input placeholder="Search members..." value={memberDirectorySearch} onChange={(event) => setMemberDirectorySearch(event.target.value)} />
           </div>
 
-          <button className="btn btn-outline">
-            Filter
-          </button>
+          {canManageMembers && <button className="btn btn-outline" onClick={loadMemberDirectory} disabled={memberDirectoryLoading}>{memberDirectoryLoading ? "Refreshing…" : "Refresh"}</button>}
         </div>
 
-        {members.length > 0 ? (
+        {!canViewMembers ? <EmptyState title="Member status access is not assigned" description="Ask an administrator to grant membership.view for read-only oversight." /> : memberDirectoryLoading && !memberDirectory.length ? <div className="empty-state">Loading approved members…</div> : visibleMembers.length > 0 ? (
           <div className="member-directory">
-            {members.map((member) => (
+            {visibleMembers.map((member) => (
               <div
                 className="directory-card"
-                key={member.name}
+                key={member.id}
               >
                 <div className="directory-avatar">
-                  {member.name
+                  {member.full_name
                     .split(" ")
                     .map((n) => n[0])
                     .join("")}
@@ -1630,7 +2058,7 @@ function MemberContent({
 
                 <div className="directory-info">
                   <div className="name-line">
-                    <h3>{member.name}</h3>
+                    <h3>{member.full_name}</h3>
 
                     <CheckCircle
                       size={16}
@@ -1638,28 +2066,21 @@ function MemberContent({
                     />
                   </div>
 
-                  <span>{member.role}</span>
+                  <span>{member.role} · {member.is_active ? "Active" : "Inactive"}</span>
 
                   <div className="directory-details">
-                    <span>{member.profession}</span>
-
-                    <span>
-                      <MapPin size={13} />
-                      {member.location}
-                    </span>
+                    <span>Membership ID: {member.membership_number || "Not assigned"}</span>
+                    {canManageMembers && <button type="button" className="btn btn-outline" onClick={() => setMemberActivation(member, !member.is_active)}>{member.is_active ? "Deactivate access" : "Reactivate access"}</button>}
                   </div>
                 </div>
 
-                <button className="icon-button">
-                  <ChevronRight size={18} />
-                </button>
               </div>
             ))}
           </div>
         ) : (
           <EmptyState
-            title="No verified member profiles published yet"
-            description="Member profiles will appear only after community verification and administrator approval."
+            title={memberDirectorySearch ? "No members match this search" : "No approved members yet"}
+            description={memberDirectorySearch ? "Try a different name, membership number, or committee role." : "Approved member records will appear here after membership review."}
           />
         )}
       </PageWrapper>
@@ -1671,11 +2092,11 @@ function MemberContent({
   }
 
   if (currentPage === "widow-assistance") {
-    return <WidowAssistancePage />;
+    return <WidowAssistancePage activeUser={activeUser} />;
   }
 
   if (currentPage === "payments") {
-    return <PaymentsPage activeRole={activeRole} cart={cart} />;
+    return <PaymentsPage activeRole={activeRole} activeUser={activeUser} cart={cart} />;
   }
 
   if (currentPage === "emergency") {
@@ -1691,7 +2112,11 @@ function MemberContent({
   }
 
   if (currentPage === "settings") {
-    return <SettingsPage />;
+    return <SettingsPage activeUser={activeUser} />;
+  }
+
+  if (currentPage === "committee-roles") {
+    return <SettingsPage activeUser={activeUser} committeeOnly />;
   }
 
   return <Dashboard navigate={navigate} />;
@@ -1703,8 +2128,38 @@ function MemberContent({
 
 function MatrimonialPage({
   authenticated,
+  activeUser,
   openMemberFeature,
 }) {
+  const [matrimonialProfiles, setMatrimonialProfiles] = useState([]);
+  const [myMatrimonialProfile, setMyMatrimonialProfile] = useState(null);
+  const [matrimonialReviewQueue, setMatrimonialReviewQueue] = useState([]);
+  const [matrimonialError, setMatrimonialError] = useState("");
+  const [matrimonialBusy, setMatrimonialBusy] = useState(false);
+  const canReviewMatrimonial = String(activeUser?.role || "").toUpperCase() === "ADMIN" || activeUser?.permissions?.includes("matrimonial.review");
+  const [matrimonialForm, setMatrimonialForm] = useState({ gender: "", education: "", occupation: "", location: "", marital_status: "", description: "" });
+  const loadMatrimonial = async () => {
+    const [profilesResult, mineResult, queueResult] = await Promise.allSettled([authApi("/matrimonial"), authApi("/matrimonial/mine"), canReviewMatrimonial ? authApi("/matrimonial/review") : Promise.resolve([])]);
+    if (profilesResult.status === "fulfilled") setMatrimonialProfiles(profilesResult.value);
+    if (mineResult.status === "fulfilled") {
+      const mine = mineResult.value; setMyMatrimonialProfile(mine);
+      if (mine) setMatrimonialForm({ gender: mine.gender, education: mine.education, occupation: mine.occupation, location: mine.location, marital_status: mine.maritalStatus, description: mine.description });
+    }
+    if (queueResult.status === "fulfilled") setMatrimonialReviewQueue(queueResult.value);
+    const errorResult = [profilesResult, mineResult, queueResult].find(result => result.status === "rejected");
+    setMatrimonialError(errorResult?.reason?.message || "");
+  };
+  useEffect(() => { if (authenticated) loadMatrimonial(); }, [authenticated, canReviewMatrimonial]);
+  const saveMatrimonialProfile = async (event) => {
+    event.preventDefault(); setMatrimonialBusy(true); setMatrimonialError("");
+    try { await authApi("/matrimonial", { method: "POST", body: JSON.stringify(matrimonialForm) }); await loadMatrimonial(); }
+    catch (error) { setMatrimonialError(error.message || "Profile could not be saved."); }
+    finally { setMatrimonialBusy(false); }
+  };
+  const decideMatrimonialProfile = async (profileId, action) => {
+    try { await authApi(`/matrimonial/${profileId}/decision`, { method: "PATCH", body: JSON.stringify({ action }) }); await loadMatrimonial(); }
+    catch (error) { setMatrimonialError(error.message || "Review action failed."); }
+  };
   const [genderFilter, setGenderFilter] =
     useState("All");
 
@@ -1791,6 +2246,23 @@ function MatrimonialPage({
           </button>
         )}
       </div>
+
+      {authenticated && <section className="matrimonial-membership-box" style={{ display: "block", marginBottom: 24 }}>
+        <h2>{myMatrimonialProfile ? "Your matrimonial profile" : "Create a matrimonial profile"}</h2>
+        <p>Only verified members aged 18 or above can submit. Profiles appear to verified members after committee approval. Date of birth, phone, exact address and documents stay private.</p>
+        {matrimonialError && <p role="alert">{matrimonialError}</p>}
+        {myMatrimonialProfile && <p>Application status: <strong>{myMatrimonialProfile.status}</strong></p>}
+        <form onSubmit={saveMatrimonialProfile} className="matrimonial-toolbar" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))" }}>
+          <select required value={matrimonialForm.gender} onChange={e => setMatrimonialForm({ ...matrimonialForm, gender: e.target.value })}><option value="">Gender</option><option>Male</option><option>Female</option><option>Other</option></select>
+          <input required maxLength={160} placeholder="Education" value={matrimonialForm.education} onChange={e => setMatrimonialForm({ ...matrimonialForm, education: e.target.value })} />
+          <input required maxLength={160} placeholder="Occupation" value={matrimonialForm.occupation} onChange={e => setMatrimonialForm({ ...matrimonialForm, occupation: e.target.value })} />
+          <input required maxLength={120} placeholder="City or district (no exact address)" value={matrimonialForm.location} onChange={e => setMatrimonialForm({ ...matrimonialForm, location: e.target.value })} />
+          <select required value={matrimonialForm.marital_status} onChange={e => setMatrimonialForm({ ...matrimonialForm, marital_status: e.target.value })}><option value="">Marital status</option><option>Never married</option><option>Widowed</option><option>Divorced</option><option>Other</option></select>
+          <textarea required minLength={10} maxLength={1200} placeholder="Short introduction" value={matrimonialForm.description} onChange={e => setMatrimonialForm({ ...matrimonialForm, description: e.target.value })} />
+          <button className="btn btn-primary" disabled={matrimonialBusy}>{matrimonialBusy ? "Saving…" : "Submit for review"}</button>
+        </form>
+      </section>}
+      {canReviewMatrimonial && matrimonialReviewQueue.length > 0 && <section className="matrimonial-membership-box" style={{ display: "block", marginBottom: 24 }}><h2>Profiles awaiting review</h2>{matrimonialReviewQueue.map(profile => <article key={profile.id} style={{ padding: 16, borderBottom: "1px solid #ead9cf" }}><strong>{profile.name}, {profile.age}</strong><p>{profile.gender} · {profile.location} · {profile.education} · {profile.occupation} · {profile.maritalStatus}</p><p>{profile.description}</p><button className="btn btn-primary" onClick={() => decideMatrimonialProfile(profile.id, "APPROVE")}>Approve</button> <button className="btn btn-outline" onClick={() => decideMatrimonialProfile(profile.id, "REJECT")}>Reject</button></article>)}</section>}
 
       <div className="matrimonial-toolbar">
         <div className="search-box">
@@ -1890,8 +2362,8 @@ function MatrimonialPage({
         </div>
       ) : (
         <EmptyState
-          title="No verified matrimonial profiles published yet"
-          description="For privacy and safety, this section never uses fictional or stock profiles. Verified members may publish a profile only after the matrimonial service is enabled by the community administrator."
+          title="No approved matrimonial profiles published yet"
+          description="Approved profiles from verified adult members will appear here."
         />
       )}
 
@@ -1935,16 +2407,13 @@ function MatrimonialCard({
   return (
     <div className="matrimonial-card">
       <div className="matrimonial-image">
-        <img
-          src={profile.image}
-          alt={profile.name}
-        />
+        <div className="matrimonial-avatar" aria-label={`${profile.name} profile`}>{profile.name.split(/\s+/).map(part => part[0]).slice(0, 2).join("").toUpperCase()}</div>
 
         <div className="profile-gender">
           {profile.gender}
         </div>
 
-        {profile.verified && (
+        {(profile.verified || profile.status === "PUBLISHED") && (
           <div className="profile-verified-tag">
             <CheckCircle size={13} />
             Verified
@@ -1977,7 +2446,7 @@ function MatrimonialCard({
 
         <div className="matrimonial-interest">
           <strong>Interests</strong>
-          <span>{profile.interests}</span>
+          <span>{profile.description || profile.interests || "Community member profile"}</span>
         </div>
 
         <div className="matrimonial-card-actions">
@@ -2030,7 +2499,7 @@ function Dashboard({ navigate, activeRole = "General Member", activeUser = null 
     try {
       return getStoredProfile();
     } catch {
-      return { fullName: "Suraj Kumar", profilePhoto: "" };
+      return { fullName: "", profilePhoto: "" };
     }
   });
 
@@ -2052,8 +2521,39 @@ function Dashboard({ navigate, activeRole = "General Member", activeUser = null 
   }, []);
 
   const dashboardRole = normalizeCommunityRole(activeRole);
-  const dashboardConfig = ROLE_DASHBOARD_CONFIG[dashboardRole] || ROLE_DASHBOARD_CONFIG["General Member"];
-  const displayName = activeUser?.fullName || activeUser?.name || profile.fullName || "Member";
+  const dashboardConfig = ROLE_DASHBOARD_CONFIG[dashboardRole] || (() => {
+    const permissionActions = [
+      ["membership.review", { label: "Membership applications", page: "members" }],
+      ["membership.view", { label: "Member status", page: "members" }],
+      ["announcements.manage", { label: "Announcements", page: "announcements" }],
+      ["events.manage", { label: "Events", page: "events" }],
+      ["community.records.view", { label: "Official records", page: "community-records" }],
+      ["community.records.manage", { label: "Official records", page: "community-records" }],
+      ["finance.manage", { label: "Payments & Fees", page: "payments" }],
+      ["scholarships.review", { label: "Scholarships", page: "scholarships" }],
+      ["matrimonial.review", { label: "Matrimonial", page: "matrimonial" }],
+      ["roles.manage", { label: "Committee & Roles", page: "committee-roles" }],
+    ].filter(([permission]) => activeUser?.permissions?.includes(permission)).map(([, action]) => action);
+    return {
+      title: `${dashboardRole} Dashboard`,
+      description: "Your community responsibilities and authorized tools.",
+      actions: [...permissionActions, { label: "My Profile", page: "profile" }],
+    };
+  })();
+
+  const membershipStatus = String(
+    activeUser?.membership_status ??
+    activeUser?.membershipStatus ??
+    profile.membershipStatus ??
+    "PENDING"
+  ).toUpperCase();
+
+  const displayName =
+    activeUser?.full_name ||
+    activeUser?.fullName ||
+    activeUser?.name ||
+    profile.fullName ||
+    "Member";
 
   const initials = displayName
     ? displayName
@@ -2079,7 +2579,9 @@ function Dashboard({ navigate, activeRole = "General Member", activeUser = null 
 
         <div className="verified-badge-large">
           <CheckCircle size={17} />
-          {activeUser?.membershipStatus === "PENDING" ? "Membership Pending" : dashboardRole}
+          {membershipStatus === "APPROVED"
+            ? "Verified Member"
+            : "Membership Pending"}
         </div>
       </div>
 
@@ -2197,12 +2699,16 @@ function Dashboard({ navigate, activeRole = "General Member", activeUser = null 
             <h3>{profile.fullName || "Your Name"}</h3>
 
             <span className="membership-id">
-              PC-2026-00125
+              {membershipStatus === "APPROVED"
+                ? `Membership ID: ${activeUser?.membership_number || profile.membershipId}`
+                : "Membership ID: Assigned after approval"}
             </span>
 
             <div className="profile-verified">
               <CheckCircle size={15} />
-              Verified Member
+              {membershipStatus === "APPROVED"
+                ? "Verified Member"
+                : "Membership Pending"}
             </div>
           </div>
 
@@ -2523,6 +3029,228 @@ function SchemeCard({ scheme }) {
       )}
     </>
   );
+}
+
+function ScholarshipPortalPage({ activeUser }) {
+  const [scope, setScope] = useState("CENTRAL");
+  const [schemes, setSchemes] = useState([]);
+  const [applications, setApplications] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [showSchemeForm, setShowSchemeForm] = useState(false);
+  const [editingSchemeId, setEditingSchemeId] = useState(null);
+  const [applyingTo, setApplyingTo] = useState(null);
+  const [benefitFor, setBenefitFor] = useState(null);
+  const roleName = String(activeUser?.role || "").toUpperCase();
+  const admin = ["ADMIN", "SUPER ADMIN"].includes(roleName);
+  const superAdmin = roleName === "SUPER ADMIN";
+  const scholarshipOfficer = activeUser?.permissions?.includes("scholarships.review");
+  const president = activeUser?.permissions?.includes("community.approve") && (!admin || superAdmin);
+  const canReview = admin || scholarshipOfficer || president;
+  const canManageBenefits = admin || scholarshipOfficer;
+  const canApply = String(activeUser?.membership_status || "").toUpperCase() === "APPROVED";
+  const [schemeDraft, setSchemeDraft] = useState({ scope: "COMMUNITY", name: "", provider: "", eligibility: "", amount: "", start_date: "", deadline: "", required_documents: "", application_url: "" });
+
+  const loadScholarships = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [schemeRows, applicationRows] = await Promise.all([
+        authApi("/scholarships/schemes"),
+        authApi("/scholarships/applications"),
+      ]);
+      setSchemes(Array.isArray(schemeRows) ? schemeRows : []);
+      setApplications(Array.isArray(applicationRows) ? applicationRows : []);
+    } catch (loadError) {
+      setError(loadError.message || "Could not load scholarships.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadScholarships(); }, []);
+
+  const submitScheme = async (event) => {
+    event.preventDefault();
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const { required_documents, ...rest } = schemeDraft;
+      await authApi(editingSchemeId ? `/scholarships/schemes/${editingSchemeId}` : "/scholarships/schemes", {
+        method: editingSchemeId ? "PATCH" : "POST",
+        body: JSON.stringify({ ...rest, scope: "COMMUNITY", start_date: rest.start_date || null, deadline: rest.deadline || null, required_documents: required_documents.split("\n").map((item) => item.trim()).filter(Boolean) }),
+      });
+      setEditingSchemeId(null);
+      setSchemeDraft({ scope: "COMMUNITY", name: "", provider: "", eligibility: "", amount: "", start_date: "", deadline: "", required_documents: "", application_url: "" });
+      setShowSchemeForm(false); setNotice("Scholarship added to the catalogue.");
+      await loadScholarships();
+    } catch (saveError) { setError(saveError.message || "Could not save the scholarship."); }
+    finally { setBusy(false); }
+  };
+
+  const submitApplication = async (event) => {
+    event.preventDefault();
+    if (!applyingTo) return;
+    setBusy(true); setError(""); setNotice("");
+    const form = new FormData(event.currentTarget);
+    const payload = new FormData();
+    payload.set("scheme_id", String(applyingTo.id));
+    payload.set("details", JSON.stringify({ course: form.get("course"), institution: form.get("institution"), notes: form.get("notes") }));
+    for (const file of form.getAll("files")) if (file instanceof File && file.size) payload.append("files", file);
+    try {
+      await authApi("/scholarships/applications", { method: "POST", body: payload });
+      setApplyingTo(null); setNotice("Application submitted for review.");
+      await loadScholarships();
+    } catch (submitError) { setError(submitError.message || "Could not submit the application."); }
+    finally { setBusy(false); }
+  };
+
+  const decideApplication = async (application, action) => {
+    let remark = "";
+    if (action === "REJECT") {
+      remark = window.prompt("Please provide a short reason for rejecting this application.") || "";
+      if (remark.trim().length < 3) return;
+    }
+    setBusy(true); setError(""); setNotice("");
+    try {
+      await authApi(`/scholarships/applications/${application.id}/decision`, { method: "PATCH", body: JSON.stringify({ action, remark: remark.trim() || null }) });
+      setNotice(action === "FORWARD" ? "Application forwarded to the next reviewer." : action === "APPROVE" ? "Application approved." : "Application rejected.");
+      await loadScholarships();
+    } catch (decisionError) { setError(decisionError.message || "Could not update this application."); }
+    finally { setBusy(false); }
+  };
+
+  const recordBenefit = async (event) => {
+    event.preventDefault();
+    if (!benefitFor) return;
+    setBusy(true); setError("");
+    try {
+      const payload = new FormData(event.currentTarget);
+      if (!payload.get("amount")) payload.delete("amount");
+      if (!payload.get("received_at")) payload.delete("received_at");
+      const proof = payload.get("proof");
+      if (!(proof instanceof File) || proof.size === 0) payload.delete("proof");
+      await authApi(`/scholarships/applications/${benefitFor.id}/benefits`, { method: "POST", body: payload });
+      setBenefitFor(null); setNotice("Benefit recorded separately from application approval; it is awaiting verification.");
+      await loadScholarships();
+    } catch (benefitError) { setError(benefitError.message || "Could not record the benefit."); }
+    finally { setBusy(false); }
+  };
+
+  const verifyBenefit = async (benefitId, status) => {
+    setBusy(true); setError("");
+    try {
+      await authApi(`/scholarships/benefits/${benefitId}/verify`, { method: "PATCH", body: JSON.stringify({ status }) });
+      setNotice(`Benefit record ${status.toLowerCase()}.`); await loadScholarships();
+    } catch (verifyError) { setError(verifyError.message || "Could not verify the benefit."); }
+    finally { setBusy(false); }
+  };
+
+  const editScheme = (scheme) => {
+    setEditingSchemeId(scheme.id);
+    setSchemeDraft({
+      scope: "COMMUNITY", name: scheme.name, provider: scheme.provider, eligibility: scheme.eligibility,
+      amount: scheme.amount || "", start_date: scheme.start_date || "", deadline: scheme.deadline || "",
+      required_documents: (scheme.required_documents || []).join("\n"), application_url: scheme.application_url || "",
+    });
+    setShowSchemeForm(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const openPrivateFile = async (url) => {
+    const token = sessionStorage.getItem("potterCommunityAccessToken") || localStorage.getItem("token");
+    const preview = window.open("", "_blank");
+    try {
+      const response = await fetch(`${AUTH_API_BASE}${url}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      if (!response.ok) throw new Error("Could not open this private file.");
+      const objectUrl = URL.createObjectURL(await response.blob());
+      if (preview) {
+        preview.opener = null;
+        preview.location.href = objectUrl;
+      } else {
+        const link = document.createElement("a");
+        link.href = objectUrl;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.click();
+      }
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    } catch (fileError) { preview?.close(); setError(fileError.message); }
+  };
+
+  const visibleSchemes = schemes.filter((scheme) => scheme.scope === scope);
+  const scholarshipSections = [
+    { value: "CENTRAL", label: "Central Government", note: "Schemes managed across India" },
+    { value: "STATE", label: "State Government", note: "Schemes managed by the State Government" },
+    { value: "COMMUNITY", label: "Community Scholarships", note: "Support managed by Potter Community" },
+  ];
+  const activeScholarshipSection = scholarshipSections.find((section) => section.value === scope);
+  const statusStyle = (status) => ({ display: "inline-flex", padding: "5px 9px", borderRadius: 99, background: status === "APPROVED" || status === "VERIFIED" ? "#eaf2e5" : status === "REJECTED" ? "#fbe8e5" : "#f6eee6", color: status === "APPROVED" || status === "VERIFIED" ? "#4c7043" : status === "REJECTED" ? "#a13d2d" : "#79563d", fontSize: 10, fontWeight: 800 });
+
+  return <PageWrapper>
+    <PageHeader title="Scholarships" description="Browse Central, State, and community scholarships; track applications and verified benefits." />
+    {error && <p role="alert" style={{ color: "#a13d2d", fontSize: 12 }}>{error}</p>}
+    {notice && <p role="status" style={{ color: "#39734a", fontSize: 12 }}>{notice}</p>}
+    <section style={{ margin: "18px 0", padding: 18, border: "1px solid #ead8cc", borderRadius: 16, background: "#fffdfb" }}>
+      <h2 style={{ margin: "0 0 4px", color: "#503326", fontSize: 18 }}>Choose scholarship source</h2>
+      <p style={{ color: "#806b5e", fontSize: 12, margin: "0 0 12px" }}>Government programmes and community support are managed separately.</p>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: 10 }}>
+        {scholarshipSections.map(({ value, label, note }) => { const selected = scope === value; return <button key={value} type="button" aria-pressed={selected} onClick={() => { setScope(value); if (value !== "COMMUNITY") { setShowSchemeForm(false); setEditingSchemeId(null); } }} style={{ textAlign: "left", padding: "13px 15px", minHeight: 76, border: `1px solid ${selected ? "#ad5a39" : "#ead8cc"}`, borderRadius: 12, background: selected ? "#f8ece4" : "#fff", color: "#503326", cursor: "pointer" }}><span style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13, fontWeight: 800 }}>{label}<span style={{ color: "#ad5a39" }}>{schemes.filter((item) => item.scope === value).length}</span></span><span style={{ display: "block", marginTop: 5, color: "#806b5e", fontSize: 11, fontWeight: 400 }}>{note}</span></button>; })}
+      </div>
+    </section>
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline", marginBottom: 6 }}><h2 style={{ margin: 0, color: "#503326", fontSize: 20 }}>{activeScholarshipSection?.label}</h2><span style={{ color: "#806b5e", fontSize: 11 }}>{visibleSchemes.length} {visibleSchemes.length === 1 ? "scheme" : "schemes"}</span></div>
+    <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap", margin: "0 0 12px" }}>
+      <button type="button" className="btn btn-outline" onClick={loadScholarships} disabled={loading}>{loading ? "Refreshing…" : "Refresh"}</button>
+      {admin && scope === "COMMUNITY" && <button type="button" className="btn btn-primary" onClick={() => setShowSchemeForm((current) => !current)}>{showSchemeForm ? "Close" : "Add scholarship"}</button>}
+    </div>
+    <p style={{ color: "#806b5e", fontSize: 12, margin: "0 0 16px" }}>{scope === "COMMUNITY" ? "Managed by Potter Community. Members can apply here and track their application." : "Read-only government information. Apply and check eligibility through the relevant government department."}</p>
+    {showSchemeForm && admin && scope === "COMMUNITY" && <form onSubmit={submitScheme} style={{ display: "grid", gap: 10, padding: 16, marginBottom: 18, border: "1px solid #ead8cc", borderRadius: 14, background: "#fffdfb" }}>
+      <h2 style={{ margin: 0, color: "#503326", fontSize: 17 }}>{editingSchemeId ? "Edit scholarship scheme" : "Add a scholarship scheme"}</h2>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 10 }}>
+        <span className="small-category" style={{ alignSelf: "center" }}>Community scholarship</span>
+        <input required minLength={3} maxLength={180} placeholder="Scholarship name" value={schemeDraft.name} onChange={(e) => setSchemeDraft({ ...schemeDraft, name: e.target.value })} />
+        <input required maxLength={180} placeholder="Provider / department" value={schemeDraft.provider} onChange={(e) => setSchemeDraft({ ...schemeDraft, provider: e.target.value })} />
+        <input placeholder="Amount or benefit" value={schemeDraft.amount} onChange={(e) => setSchemeDraft({ ...schemeDraft, amount: e.target.value })} />
+        <input type="date" aria-label="Application start date" value={schemeDraft.start_date} onChange={(e) => setSchemeDraft({ ...schemeDraft, start_date: e.target.value })} />
+        <input type="date" aria-label="Application deadline" value={schemeDraft.deadline} onChange={(e) => setSchemeDraft({ ...schemeDraft, deadline: e.target.value })} />
+        <input type="url" placeholder="Official application URL (optional)" value={schemeDraft.application_url} onChange={(e) => setSchemeDraft({ ...schemeDraft, application_url: e.target.value })} />
+      </div>
+      <textarea required minLength={5} maxLength={3000} rows={3} placeholder="Eligibility" value={schemeDraft.eligibility} onChange={(e) => setSchemeDraft({ ...schemeDraft, eligibility: e.target.value })} />
+      <textarea rows={2} placeholder="Required documents — one per line" value={schemeDraft.required_documents} onChange={(e) => setSchemeDraft({ ...schemeDraft, required_documents: e.target.value })} />
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}><button className="btn btn-primary" type="submit" disabled={busy}>{busy ? "Saving…" : editingSchemeId ? "Save changes" : "Save scholarship"}</button>{editingSchemeId && <button className="btn btn-outline" type="button" onClick={() => { setEditingSchemeId(null); setShowSchemeForm(false); setSchemeDraft({ scope: "COMMUNITY", name: "", provider: "", eligibility: "", amount: "", start_date: "", deadline: "", required_documents: "", application_url: "" }); }}>Cancel</button>}</div>
+    </form>}
+    {loading ? <div className="empty-state">Loading scholarship catalogue…</div> : visibleSchemes.length ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,320px),1fr))", gap: 14 }}>{visibleSchemes.map((scheme) => <article key={scheme.id} className="info-card compact-service-card">
+      <div className="info-card-top"><span className="small-category">{scheme.provider}</span><span style={statusStyle(scheme.expired ? "EXPIRED" : scheme.not_open ? "UPCOMING" : "ACTIVE")}>{scheme.expired ? "Expired · history retained" : scheme.not_open ? "Opens later" : scheme.scope}</span></div>
+      <h3>{scheme.name}</h3><p style={{ color: "#806b5e", fontSize: 12 }}>{scheme.eligibility}</p>
+      {scheme.amount && <div className="amount-box"><IndianRupee size={16}/><span>{scheme.amount}</span></div>}
+      <p style={{ color: "#806b5e", fontSize: 11 }}>Application period: {scheme.start_date || "Open date not listed"} – {scheme.deadline || "Deadline as announced by provider"}</p>
+      {scheme.required_documents?.length > 0 && <p style={{ color: "#806b5e", fontSize: 11 }}>Documents: {scheme.required_documents.join(", ")}</p>}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{canApply && scheme.scope === "COMMUNITY" && !scheme.expired && !scheme.not_open && <button className="btn btn-primary" type="button" onClick={() => setApplyingTo(scheme)}>Apply</button>}{admin && scheme.scope === "COMMUNITY" && <button className="btn btn-outline" type="button" onClick={() => editScheme(scheme)}>Edit scheme</button>}{scheme.application_url && <a className="btn btn-outline" href={scheme.application_url} target="_blank" rel="noreferrer">Official application</a>}</div>
+    </article>)}</div> : <EmptyState title={scope === "STATE" ? "No State scholarship is listed yet" : scope === "COMMUNITY" ? "No community scholarship has been added" : "No Central scholarship is available"} description={scope === "COMMUNITY" && admin ? "Use Add scholarship to publish a community-managed scheme." : scope === "COMMUNITY" ? "Check again later or contact the community office." : "Government scholarship listings will appear here when available. Apply through the official government portal."} />}
+
+    <section style={{ marginTop: 26 }}>
+      <h2 style={{ color: "#503326", fontSize: 19 }}>{canReview ? "Scholarship application review" : "My scholarship applications and benefits"}</h2>
+      {applications.length ? <div style={{ display: "grid", gap: 10 }}>{applications.map((application) => <article key={application.id} style={{ padding: 15, border: "1px solid #ead8cc", borderRadius: 13, background: "#fffdfb" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}><div><strong style={{ color: "#503326" }}>{application.scheme_name}</strong><div style={{ color: "#806b5e", fontSize: 11, marginTop: 4 }}>{application.member_name} · {application.membership_number || "Membership ID pending"} · Submitted {new Date(application.created_at).toLocaleDateString()}</div></div><div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}><span style={statusStyle(application.status)}>{application.status}</span><span style={statusStyle(application.benefit_status)}>{application.benefit_status.replaceAll("_", " ")}</span></div></div>
+        {application.details?.course && <p style={{ color: "#806b5e", fontSize: 11 }}>Course: {application.details.course}{application.details.institution ? ` · ${application.details.institution}` : ""}</p>}
+        {application.details?.notes && <p style={{ color: "#806b5e", fontSize: 11 }}>{application.details.notes}</p>}
+        {[application.admin_remark, application.officer_remark, application.president_remark].filter(Boolean).map((remark, index) => <p key={index} style={{ color: "#806b5e", fontSize: 11 }}>Review note: {remark}</p>)}
+        {canReview && <p style={{ color: "#806b5e", fontSize: 11 }}>Review stage: {application.review_stage.replaceAll("_", " ")}</p>}
+        {application.documents?.length > 0 && <div style={{ display: "flex", gap: 7, flexWrap: "wrap", margin: "8px 0" }}>{application.documents.map((document) => <button key={document.id} type="button" className="btn btn-outline" onClick={() => openPrivateFile(document.download_url)}>View {document.document_type}</button>)}</div>}
+        {canReview && ["SUBMITTED", "UNDER_REVIEW"].includes(application.status) && <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+          {admin && application.review_stage === "ADMIN_REVIEW" && <><button type="button" className="btn btn-primary" disabled={busy} onClick={() => decideApplication(application, "FORWARD")}>Forward to Scholarship Officer</button><button type="button" className="btn btn-outline" disabled={busy} onClick={() => decideApplication(application, "REJECT")}>Reject</button></>}
+          {(!admin || superAdmin) && scholarshipOfficer && application.review_stage === "SCHOLARSHIP_OFFICER_REVIEW" && <><button type="button" className="btn btn-primary" disabled={busy} onClick={() => decideApplication(application, "FORWARD")}>Forward to President</button><button type="button" className="btn btn-outline" disabled={busy} onClick={() => decideApplication(application, "REJECT")}>Reject</button></>}
+          {president && application.review_stage === "PRESIDENT_REVIEW" && <><button type="button" className="btn btn-primary" disabled={busy} onClick={() => decideApplication(application, "APPROVE")}>Approve application</button><button type="button" className="btn btn-outline" disabled={busy} onClick={() => decideApplication(application, "REJECT")}>Reject</button></>}
+        </div>}
+        {application.status === "APPROVED" && canManageBenefits && <button type="button" className="btn btn-outline" style={{ marginTop: 8 }} onClick={() => setBenefitFor(application)}>Record benefit received</button>}
+        {application.benefits?.length > 0 && <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #f0e2d8" }}>{application.benefits.map((benefit) => <div key={benefit.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", padding: "6px 0", color: "#624b3d", fontSize: 11 }}><span>{benefit.benefit_type}{benefit.amount != null ? ` · ₹${benefit.amount}` : ""}{benefit.received_at ? ` · ${benefit.received_at}` : ""}{benefit.reference_number ? ` · Ref ${benefit.reference_number}` : ""}</span><span style={statusStyle(benefit.verification_status)}>{benefit.verification_status}</span>{benefit.proof_url && <button type="button" className="btn btn-outline" onClick={() => openPrivateFile(benefit.proof_url)}>View proof</button>}{canManageBenefits && benefit.verification_status === "PENDING" && <><button type="button" className="btn btn-outline" disabled={busy} onClick={() => verifyBenefit(benefit.id, "VERIFIED")}>Verify benefit</button><button type="button" className="btn btn-outline" disabled={busy} onClick={() => verifyBenefit(benefit.id, "REJECTED")}>Reject benefit</button></>}</div>)}</div>}
+      </article>)}</div> : <EmptyState title="No scholarship applications yet" description={canApply ? "Apply to an available scheme above; you can track review and benefit records here." : canReview ? "Member applications will appear here." : "Your application and verified benefit history will appear here."} />}
+    </section>
+
+    {applyingTo && <div className="modal-overlay"><section className="auth-modal" role="dialog" aria-modal="true" style={{ maxHeight: "90dvh", overflowY: "auto" }}><button className="modal-close" type="button" onClick={() => setApplyingTo(null)}>×</button><h2>Scholarship application</h2><p className="auth-description">{applyingTo.name}</p><p style={{ color: "#806b5e", fontSize: 11 }}>Required documents: {applyingTo.required_documents?.join(", ") || "Supporting documents, if applicable"}</p><form onSubmit={submitApplication} style={{ display: "grid", gap: 10 }}><input name="course" placeholder="Course / programme" required/><input name="institution" placeholder="School / college / institution" required/><textarea name="notes" placeholder="Additional eligibility details" rows={3}/><label style={{ color: "#806b5e", fontSize: 11 }}>Upload supporting documents<input name="files" type="file" accept=".pdf,.jpg,.jpeg,.png" multiple required={Boolean(applyingTo.required_documents?.length)} style={{ display: "block", marginTop: 7 }}/></label><button type="submit" className="btn btn-primary" disabled={busy}>{busy ? "Submitting…" : "Submit application"}</button></form></section></div>}
+    {benefitFor && <div className="modal-overlay"><section className="auth-modal" role="dialog" aria-modal="true" style={{ maxHeight: "90dvh", overflowY: "auto" }}><button className="modal-close" type="button" onClick={() => setBenefitFor(null)}>×</button><h2>Record benefit received</h2><p className="auth-description">{benefitFor.member_name} · {benefitFor.scheme_name}</p><form onSubmit={recordBenefit} style={{ display: "grid", gap: 10 }}><input name="benefit_type" placeholder="Benefit type" required/><input name="amount" type="number" min="0" step="0.01" placeholder="Amount, if applicable"/><input name="received_at" type="date"/><input name="reference_number" placeholder="Reference number"/><label style={{ color: "#806b5e", fontSize: 11 }}>Supporting proof (optional)<input name="proof" type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display: "block", marginTop: 7 }}/></label><button className="btn btn-primary" disabled={busy}>Record for verification</button></form></section></div>}
+  </PageWrapper>;
 }
 
 function ScholarshipCard({ scholarship }) {
@@ -2947,7 +3675,7 @@ function ApplicationModal({ type, item, close }) {
    requirements. Real payment processing requires backend
    verification, signed webhooks, idempotency and audit logs.
 ========================================================= */
-function PaymentsPage({ activeRole, cart = [] }) {
+function PaymentsPage({ activeRole, activeUser, cart = [] }) {
   const STORE_KEY = "potter-community-payment-center-v1";
   const [paymentData, setPaymentData] = useState(() => {
     const defaults = {
@@ -2978,8 +3706,10 @@ function PaymentsPage({ activeRole, cart = [] }) {
   const [filter, setFilter] = useState("All");
 
   const role = activeRole || "General Member";
-  const canConfigureFees = ["Super Admin", "Admin", "President / Head", "Secretary", "Treasurer", "Director", "Nominated Director"].includes(role);
-  const canManageFinance = ["Super Admin", "Admin", "Treasurer", "President / Head"].includes(role);
+  const isPlatformAdmin = String(activeUser?.role || "").toUpperCase() === "ADMIN";
+  const canConfigureFees = isPlatformAdmin || activeUser?.permissions?.includes("finance.manage");
+  const canManageFinance = isPlatformAdmin || activeUser?.permissions?.includes("finance.manage");
+  const canApproveRefund = isPlatformAdmin || activeUser?.permissions?.includes("community.approve");
   const money = (value) => value === "" || value === null || value === undefined || !Number.isFinite(Number(value)) ? "Not configured" : new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(Number(value));
   const typeLabels = {
     "membership-registration": "Membership registration fee",
@@ -2988,6 +3718,30 @@ function PaymentsPage({ activeRole, cart = [] }) {
     donation: "Community donation",
     "event-fee": "Event fee",
   };
+  const loadFinanceData = async () => {
+    try {
+      const [policy, transactions, refunds] = await Promise.all([
+        authApi("/finance/policy"),
+        authApi("/finance/transactions"),
+        authApi("/finance/refunds"),
+      ]);
+      const fees = {
+        registration: policy.registration_fee ?? "",
+        renewal: policy.renewal_fee ?? "",
+        event: policy.event_fee ?? "",
+      };
+      const payments = (Array.isArray(transactions) ? transactions : []).map((item) => ({
+        ...item,
+        typeLabel: typeLabels[item.type] || item.type,
+        status: item.status,
+      }));
+      setPaymentData({ ...paymentData, fees, payments, refunds: Array.isArray(refunds) ? refunds : [] });
+      setFeeDraft({ registration: fees.registration === "" ? "" : String(fees.registration), renewal: fees.renewal === "" ? "" : String(fees.renewal), event: fees.event === "" ? "" : String(fees.event) });
+    } catch (error) {
+      setNotice(error.message || "Finance records could not be loaded from the server.");
+    }
+  };
+  useEffect(() => { loadFinanceData(); }, []);
   const persist = (next) => {
     setPaymentData(next);
     try { localStorage.setItem(STORE_KEY, JSON.stringify(next)); } catch { setNotice("Could not save in this browser. Storage may be full or disabled."); }
@@ -3003,7 +3757,7 @@ function PaymentsPage({ activeRole, cart = [] }) {
     const configured = configuredAmountForType(type);
     setAmount(configured !== "" ? String(configured) : "");
   };
-  const saveFees = (e) => {
+  const saveFees = async (e) => {
     e.preventDefault();
     if (!canConfigureFees) return;
     const nextFees = { ...paymentData.fees };
@@ -3015,8 +3769,20 @@ function PaymentsPage({ activeRole, cart = [] }) {
       }
       nextFees[key] = value === "" ? "" : Number(value);
     }
-    persist({ ...paymentData, fees: nextFees });
-    setNotice("Fee configuration saved.");
+    try {
+      await authApi("/finance/policy", {
+        method: "PUT",
+        body: JSON.stringify({
+          registration_fee: nextFees.registration === "" ? null : Number(nextFees.registration),
+          renewal_fee: nextFees.renewal === "" ? null : Number(nextFees.renewal),
+          event_fee: nextFees.event === "" ? null : Number(nextFees.event),
+        }),
+      });
+      persist({ ...paymentData, fees: nextFees });
+      setNotice("Fee configuration saved to the community finance records.");
+    } catch (error) {
+      setNotice(error.message || "Could not save fee configuration.");
+    }
   };
   // Loads Razorpay Checkout only when a member chooses to pay.
   const loadRazorpayCheckout = () => new Promise((resolve, reject) => {
@@ -3141,37 +3907,40 @@ function PaymentsPage({ activeRole, cart = [] }) {
     }
   };
 
-  const createPaymentRecord = (e) => {
+  const createPaymentRecord = async (e) => {
     e.preventDefault();
     const numericAmount = Number(amount);
     if (!payerName.trim()) { setNotice("Enter the payer name before continuing."); return; }
     if (!Number.isFinite(numericAmount) || numericAmount <= 0) { setNotice("Enter a valid amount greater than ₹0."); return; }
     if (payerEmail && !/^\S+@\S+\.\S+$/.test(payerEmail)) { setNotice("Enter a valid email address or leave it blank."); return; }
-    const id = `PAY-${new Date().getFullYear()}-${Date.now().toString().slice(-8)}`;
     const transactionReference = externalReference.trim();
     if (!transactionReference) { setNotice("Enter the real transaction reference from the bank, UPI app, or payment provider. This form cannot collect money."); return; }
     if (paymentData.payments.some((item) => item.transactionReference.toLowerCase() === transactionReference.toLowerCase())) {
       setNotice("That transaction reference already exists. Duplicate references are not accepted.");
       return;
     }
-    const record = {
-      id, type: paymentType, typeLabel: typeLabels[paymentType], amount: Number(numericAmount.toFixed(2)),
-      payerName: payerName.trim(), payerEmail: payerEmail.trim(), transactionReference,
-      status: "Pending verification", receiptNumber: `ACK-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`,
-      createdAt: new Date().toISOString(), createdByRole: role, reconciled: false,
-      source: "Offline reference submitted by payer — pending independent verification",
-    };
-    persist({ ...paymentData, payments: [record, ...paymentData.payments] });
-    setExternalReference("");
-    setNotice(`Offline reference ${record.id} submitted for finance verification; no money was collected by this form and membership is not approved.`);
-    setActiveTab("payments");
+    try {
+      const record = await authApi("/finance/transactions", {
+        method: "POST",
+        body: JSON.stringify({ payment_type: paymentType, amount: Number(numericAmount.toFixed(2)), payer_name: payerName.trim(), payer_email: payerEmail.trim() || null, transaction_reference: transactionReference }),
+      });
+      setExternalReference("");
+      setNotice(`Offline reference ${record.id} was saved on the server for finance verification. This does not approve membership.`);
+      setActiveTab("payments");
+      await loadFinanceData();
+    } catch (error) {
+      setNotice(error.message || "Could not submit the payment reference.");
+    }
   };
-  const verifyPayment = (paymentId) => {
+  const verifyPayment = async (paymentId) => {
     if (!canManageFinance) return;
-    persist({ ...paymentData, payments: paymentData.payments.map((p) => p.id === paymentId ? { ...p, status: "Verified", verifiedAt: new Date().toISOString(), verifiedByRole: role } : p) });
-    setNotice("Payment record marked verified.");
+    try {
+      await authApi(`/finance/transactions/${encodeURIComponent(paymentId)}/verify`, { method: "PATCH" });
+      setNotice("Payment record verified and saved.");
+      await loadFinanceData();
+    } catch (error) { setNotice(error.message || "Could not verify this payment record."); }
   };
-  const requestRefund = (e) => {
+  const requestRefund = async (e) => {
     e.preventDefault();
     if (!canManageFinance) return;
     const payment = paymentData.payments.find((p) => p.id === refundDraft.paymentId);
@@ -3180,21 +3949,36 @@ function PaymentsPage({ activeRole, cart = [] }) {
     if (payment.status !== "Verified") { setNotice("Only verified payment records can be considered for a refund."); return; }
     if (!Number.isFinite(refundAmount) || refundAmount <= 0 || refundAmount > payment.amount) { setNotice("Enter a valid refund amount no greater than the verified payment amount."); return; }
     if (!refundDraft.reason.trim()) { setNotice("Enter a reason for the refund request."); return; }
-    const refund = { id: `RFD-${Date.now().toString(36).toUpperCase()}`, paymentId: payment.id, transactionReference: payment.transactionReference, amount: Number(refundAmount.toFixed(2)), reason: refundDraft.reason.trim(), status: "Requested", createdAt: new Date().toISOString(), createdByRole: role };
-    persist({ ...paymentData, refunds: [refund, ...paymentData.refunds] });
-    setRefundDraft({ paymentId: "", amount: "", reason: "" });
-    setNotice(`Refund request ${refund.id} recorded.`);
-    setActiveTab("refunds");
+    try {
+      const refund = await authApi(`/finance/transactions/${encodeURIComponent(payment.id)}/refunds`, { method: "POST", body: JSON.stringify({ amount: Number(refundAmount.toFixed(2)), reason: refundDraft.reason.trim() }) });
+      setRefundDraft({ paymentId: "", amount: "", reason: "" });
+      setNotice(`Refund request ${refund.id} recorded for President approval.`);
+      setActiveTab("refunds");
+      await loadFinanceData();
+    } catch (error) { setNotice(error.message || "Could not record the refund request."); }
   };
-  const updateRefund = (refundId, status) => {
-    if (!canManageFinance) return;
-    persist({ ...paymentData, refunds: paymentData.refunds.map((r) => r.id === refundId ? { ...r, status, updatedAt: new Date().toISOString(), updatedByRole: role } : r) });
-    setNotice(`Refund record updated to “${status}”. Actual refunds must be processed through the payment provider.`);
+  const updateRefund = async (refundId, status) => {
+    try {
+      if (status === "Approved for processing" || status === "Rejected") {
+        if (!canApproveRefund) return;
+        const remark = status === "Rejected" ? window.prompt("Reason for rejecting this refund request?") : null;
+        if (status === "Rejected" && (!remark || remark.trim().length < 3)) return;
+        await authApi(`/finance/refunds/${encodeURIComponent(refundId)}/decision`, { method: "PATCH", body: JSON.stringify({ decision: status === "Rejected" ? "REJECTED" : "APPROVED", remark }) });
+      } else if (status === "Refunded") {
+        if (!canManageFinance) return;
+        await authApi(`/finance/refunds/${encodeURIComponent(refundId)}/processed`, { method: "PATCH" });
+      }
+      setNotice(`Refund record updated to “${status}”. Any actual refund must still be sent through the payment provider.`);
+      await loadFinanceData();
+    } catch (error) { setNotice(error.message || "Could not update this refund."); }
   };
-  const reconcile = (paymentId) => {
+  const reconcile = async (paymentId) => {
     if (!canManageFinance) return;
-    persist({ ...paymentData, payments: paymentData.payments.map((p) => p.id === paymentId ? { ...p, reconciled: true, reconciledAt: new Date().toISOString(), reconciledByRole: role } : p) });
-    setNotice("Record marked reconciled.");
+    try {
+      await authApi(`/finance/transactions/${encodeURIComponent(paymentId)}/reconcile`, { method: "PATCH" });
+      setNotice("Payment record reconciled and saved.");
+      await loadFinanceData();
+    } catch (error) { setNotice(error.message || "Could not reconcile this payment record."); }
   };
   const printReceipt = (payment) => {
     const win = window.open("", "_blank", "width=700,height=800");
@@ -3265,7 +4049,7 @@ function PaymentsPage({ activeRole, cart = [] }) {
 
       {activeTab === "refunds" && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(100%,320px),1fr))", gap: 16, alignItems: "start" }}>
         {canManageFinance && <section style={panelStyle}><h2 style={{ margin: "0 0 5px", fontSize: 17, color: "#442d20" }}>Record refund request</h2><form onSubmit={requestRefund} style={{ display: "grid", gap: 12 }}><div><label style={labelStyle}>Verified payment</label><select required value={refundDraft.paymentId} onChange={(e) => { const payment = paymentData.payments.find((p) => p.id === e.target.value); setRefundDraft({ ...refundDraft, paymentId: e.target.value, amount: payment ? String(payment.amount) : "" }); }} style={inputStyle}><option value="">Choose a verified payment</option>{paymentData.payments.filter((p) => p.status === "Verified").map((p) => <option key={p.id} value={p.id}>{p.id} · ₹{p.amount.toFixed(2)} · {p.payerName}</option>)}</select></div><div><label style={labelStyle}>Refund amount (₹)</label><input type="number" required min="0.01" step="0.01" value={refundDraft.amount} onChange={(e) => setRefundDraft({ ...refundDraft, amount: e.target.value })} style={inputStyle}/></div><div><label style={labelStyle}>Reason</label><textarea required rows="3" value={refundDraft.reason} onChange={(e) => setRefundDraft({ ...refundDraft, reason: e.target.value })} placeholder="Reason for refund request" style={{ ...inputStyle, resize: "vertical" }}/></div><button className="btn btn-primary" type="submit"><RotateCcw size={15}/> Save refund record</button></form></section>}
-        <section style={panelStyle}><h2 style={{ margin: "0 0 13px", fontSize: 17, color: "#442d20" }}>Refund history</h2>{paymentData.refunds.length === 0 ? <EmptyState title="No refund records yet" description="Refund requests and their processing status will appear here."/> : paymentData.refunds.map((r) => <div key={r.id} style={{ padding: "13px 0", borderBottom: "1px solid #f0e5dc" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}><strong style={{ fontSize: 12 }}>{r.id}</strong><span style={statusStyle(r.status)}>{r.status}</span></div><p style={{ margin: "7px 0", fontSize: 12, color: "#684c3b" }}>₹{r.amount.toFixed(2)} · Payment {r.paymentId}</p><p style={{ margin: "0 0 8px", fontSize: 11, color: "#887366" }}>{r.reason}</p><small style={{ color: "#9b887b" }}>{formatDate(r.createdAt)}</small>{canManageFinance && <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginTop: 10 }}>{r.status === "Requested" && <><button className="btn btn-outline" type="button" onClick={() => updateRefund(r.id, "Approved for processing")}>Approve request</button><button className="btn btn-outline" type="button" onClick={() => updateRefund(r.id, "Rejected")}>Reject</button></>}{r.status === "Approved for processing" && <button className="btn btn-primary" type="button" onClick={() => updateRefund(r.id, "Refunded")}>Mark refunded</button>}</div>}</div>)}</section>
+        <section style={panelStyle}><h2 style={{ margin: "0 0 13px", fontSize: 17, color: "#442d20" }}>Refund history</h2>{paymentData.refunds.length === 0 ? <EmptyState title="No refund records yet" description="Refund requests and their processing status will appear here."/> : paymentData.refunds.map((r) => <div key={r.id} style={{ padding: "13px 0", borderBottom: "1px solid #f0e5dc" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}><strong style={{ fontSize: 12 }}>{r.id}</strong><span style={statusStyle(r.status)}>{r.status}</span></div><p style={{ margin: "7px 0", fontSize: 12, color: "#684c3b" }}>₹{r.amount.toFixed(2)} · Payment {r.paymentId}</p><p style={{ margin: "0 0 8px", fontSize: 11, color: "#887366" }}>{r.reason}</p><small style={{ color: "#9b887b" }}>{formatDate(r.createdAt)}</small>{((canManageFinance && r.status === "Approved for processing") || (canApproveRefund && r.status === "Requested")) && <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginTop: 10 }}>{canApproveRefund && r.status === "Requested" && <><button className="btn btn-outline" type="button" onClick={() => updateRefund(r.id, "Approved for processing")}>Approve request</button><button className="btn btn-outline" type="button" onClick={() => updateRefund(r.id, "Rejected")}>Reject</button></>}{canManageFinance && r.status === "Approved for processing" && <button className="btn btn-primary" type="button" onClick={() => updateRefund(r.id, "Refunded")}>Mark refunded</button>}</div>}</div>)}</section>
       </div>}
 
       {activeTab === "reconciliation" && <section style={panelStyle}><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 14 }}><div><h2 style={{ margin: 0, fontSize: 17, color: "#442d20" }}>Payment reconciliation</h2></div><span style={{ fontSize: 11, color: "#887366" }}>{paymentData.payments.filter((p) => !p.reconciled).length} unreconciled</span></div>{paymentData.payments.length === 0 ? <EmptyState title="No transactions to reconcile" description="Payment records will appear here after a member records a transaction."/> : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 750, fontSize: 11 }}><thead><tr style={{ textAlign: "left", background: "#f9eee6", color: "#6a4a37" }}>{["Reference", "Payer", "Type", "Amount", "Payment status", "Reconciliation", "Action"].map((h) => <th key={h} style={{ padding: 11 }}>{h}</th>)}</tr></thead><tbody>{paymentData.payments.map((p) => <tr key={p.id} style={{ borderBottom: "1px solid #f0e5dc" }}><td style={{ padding: 11 }}>{p.transactionReference}</td><td style={{ padding: 11 }}>{p.payerName}</td><td style={{ padding: 11 }}>{p.typeLabel}</td><td style={{ padding: 11 }}>₹{p.amount.toFixed(2)}</td><td style={{ padding: 11 }}><span style={statusStyle(p.status)}>{p.status}</span></td><td style={{ padding: 11 }}>{p.reconciled ? "Reconciled" : "Unreconciled"}</td><td style={{ padding: 11 }}>{canManageFinance && !p.reconciled ? <button type="button" className="btn btn-outline" onClick={() => reconcile(p.id)}>Mark reconciled</button> : "—"}</td></tr>)}</tbody></table></div>}</section>}
@@ -3277,38 +4061,125 @@ function PaymentsPage({ activeRole, cart = [] }) {
   );
 }
 
-function WidowAssistancePage() {
+function WidowAssistancePage({ activeUser }) {
   const [form, setForm] = useState({
     applicantName: "",
     state: "",
     district: "",
     assistanceType: "Widow pension",
+    scope: "GOVERNMENT",
     annualIncome: "",
     referenceNumber: "",
     notes: "",
   });
-  const [application, setApplication] = useState(null);
+  const [applications, setApplications] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [benefitFor, setBenefitFor] = useState(null);
+  const isAdmin = ["ADMIN", "SUPER ADMIN"].includes(String(activeUser?.role || "").toUpperCase());
+  const application = applications[0] || null;
+
+  const loadApplications = async () => {
+    setLoading(true);
+    try {
+      const rows = await authApi("/assistance/applications");
+      setApplications(Array.isArray(rows) ? rows : []);
+      const needsUpdate = !isAdmin && rows.find((item) => item.status === "DOCUMENTS_REQUIRED");
+      if (needsUpdate) setForm((current) => ({ ...current, applicantName: needsUpdate.applicantName || current.applicantName, state: needsUpdate.state || current.state, district: needsUpdate.district || current.district, assistanceType: needsUpdate.assistanceType || current.assistanceType, scope: needsUpdate.scope || current.scope, annualIncome: needsUpdate.annualIncome || current.annualIncome, referenceNumber: needsUpdate.officialReference || current.referenceNumber, notes: needsUpdate.notes || current.notes }));
+      setError("");
+    } catch (loadError) {
+      setError(loadError.message || "Could not load assistance requests.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadApplications(); }, []);
 
   const update = (field, value) => {
     setForm((current) => ({ ...current, [field]: value }));
     setMessage("");
   };
 
-  const submitApplication = (event) => {
+  const submitApplication = async (event) => {
     event.preventDefault();
-    const generatedReference = `WFA-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
-    const submittedAt = new Date().toLocaleString();
-    const record = {
-      ...form,
-      referenceNumber: form.referenceNumber.trim() || generatedReference,
-      submittedAt,
-      status: "Recorded locally — not submitted to a government department",
-      decisionReason: "No official decision recorded.",
-      benefitHistory: [],
-    };
-    setApplication(record);
-    setMessage("Your assistance request has been saved.");
+    setBusy(true); setError(""); setMessage("");
+    const payload = new FormData(event.currentTarget);
+    const files = payload.getAll("files");
+    const request = new FormData();
+    request.set("assistance_type", form.assistanceType);
+    request.set("scope", form.scope);
+    request.set("official_reference", form.referenceNumber.trim());
+    request.set("details", JSON.stringify({ applicantName: form.applicantName, state: form.state, district: form.district, annualIncome: form.annualIncome, notes: form.notes }));
+    for (const file of files) if (file instanceof File && file.size) request.append("files", file);
+    try {
+      const resubmission = applications.find((item) => item.status === "DOCUMENTS_REQUIRED");
+      await authApi(resubmission ? `/assistance/applications/${resubmission.id}/resubmit` : "/assistance/applications", { method: resubmission ? "PATCH" : "POST", body: request });
+      setMessage(resubmission ? "Updated request resubmitted for community review." : "Request sent for community review. This does not submit a government application.");
+      setForm({ applicantName: "", state: "", district: "", assistanceType: "Widow pension", scope: "GOVERNMENT", annualIncome: "", referenceNumber: "", notes: "" });
+      await loadApplications();
+    } catch (submitError) { setError(submitError.message || "Could not submit the request."); }
+    finally { setBusy(false); }
+  };
+
+  const updateDecision = async (applicationId, status) => {
+    const reason = window.prompt(status === "APPROVED" ? "Review note (optional):" : "Please enter the reason or missing documents:");
+    if (status !== "APPROVED" && !reason?.trim()) return;
+    setBusy(true); setError("");
+    try {
+      await authApi(`/assistance/applications/${applicationId}/decision`, { method: "PATCH", body: JSON.stringify({ status, reason: reason?.trim() || null }) });
+      setMessage(`Request ${status.toLowerCase().replaceAll("_", " ")}.`);
+      await loadApplications();
+    } catch (decisionError) { setError(decisionError.message || "Could not update the request."); }
+    finally { setBusy(false); }
+  };
+
+  const updateOfficialStatus = async (applicationId, status) => {
+    const reason = window.prompt(`Add evidence or verification note for official status ${status}:`);
+    if (!reason?.trim()) return;
+    setBusy(true); setError("");
+    try {
+      await authApi(`/assistance/applications/${applicationId}/official-status`, { method: "PATCH", body: JSON.stringify({ status, reason: reason.trim() }) });
+      await loadApplications();
+    } catch (statusError) { setError(statusError.message || "Could not update official status."); }
+    finally { setBusy(false); }
+  };
+
+  const submitBenefit = async (event) => {
+    event.preventDefault();
+    if (!benefitFor) return;
+    setBusy(true); setError("");
+    const data = new FormData(event.currentTarget);
+    try {
+      await authApi(`/assistance/applications/${benefitFor.id}/benefits`, { method: "POST", body: data });
+      setBenefitFor(null); setMessage("Benefit receipt recorded and awaiting verification.");
+      await loadApplications();
+    } catch (benefitError) { setError(benefitError.message || "Could not record benefit."); }
+    finally { setBusy(false); }
+  };
+
+  const verifyBenefit = async (benefitId, status) => {
+    setBusy(true); setError("");
+    try {
+      await authApi(`/assistance/benefits/${benefitId}/verify`, { method: "PATCH", body: JSON.stringify({ status }) });
+      await loadApplications();
+    } catch (verifyError) { setError(verifyError.message || "Could not verify benefit."); }
+    finally { setBusy(false); }
+  };
+
+  const openAssistanceFile = async (url) => {
+    const token = sessionStorage.getItem("potterCommunityAccessToken") || localStorage.getItem("token");
+    const preview = window.open("", "_blank");
+    try {
+      const response = await fetch(`${AUTH_API_BASE}${url}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      if (!response.ok) throw new Error("Could not open this private document.");
+      const objectUrl = URL.createObjectURL(await response.blob());
+      if (preview) { preview.opener = null; preview.location.href = objectUrl; }
+      else { const link = document.createElement("a"); link.href = objectUrl; link.target = "_blank"; link.rel = "noopener noreferrer"; link.click(); }
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    } catch (fileError) { preview?.close(); setError(fileError.message); }
   };
 
   const fieldStyle = {
@@ -3344,6 +4215,8 @@ function WidowAssistancePage() {
         title="Widow Pension & Financial Assistance"
         description="Explore available support, prepare your details, and keep track of your assistance request."
       />
+      {error && <p role="alert" style={{ color: "#a13d2d", fontSize: 12 }}>{error}</p>}
+      {message && <p role="status" style={{ color: "#39734a", fontSize: 12 }}>{message}</p>}
 
       <div style={{ display: "flex", alignItems: "flex-start", gap: 14, padding: "17px 19px", marginBottom: 22, border: "1px solid #ead1bf", borderRadius: 14, background: "linear-gradient(105deg, #fbede2 0%, #fff8f1 100%)" }}>
         <div style={{ width: 44, height: 44, flex: "0 0 44px", display: "grid", placeItems: "center", borderRadius: 12, background: "#fff", color: "#a9512f", border: "1px solid #f0d6c5" }}><ShieldCheck size={22} /></div>
@@ -3404,6 +4277,10 @@ function WidowAssistancePage() {
               </select>
             </div>
             <div>
+              <label style={labelStyle}>Scheme source <span style={{ color: "#b45131" }}>*</span></label>
+              <select style={fieldStyle} value={form.scope} onChange={(e) => update("scope", e.target.value)}><option value="GOVERNMENT">Central / State Government</option><option value="COMMUNITY">Potter Community</option></select>
+            </div>
+            <div>
               <label style={labelStyle}>State / Union Territory <span style={{ color: "#b45131" }}>*</span></label>
               <input style={fieldStyle} value={form.state} onChange={(e) => update("state", e.target.value)} placeholder="Enter state or Union Territory" autoComplete="address-level1" required />
             </div>
@@ -3426,17 +4303,21 @@ function WidowAssistancePage() {
             <label style={labelStyle}>Additional notes <span style={{ color: "#927a6d", fontWeight: 400 }}>(optional)</span></label>
             <textarea style={{ ...fieldStyle, minHeight: 112, resize: "vertical", lineHeight: 1.6 }} rows={4} value={form.notes} onChange={(e) => update("notes", e.target.value)} placeholder="Add relevant details that may help you prepare your application. Do not enter full Aadhaar, bank account, or other sensitive identity numbers here." />
           </div>
+          <div style={{ marginTop: 16 }}><label style={labelStyle}>Supporting documents (optional)</label><input name="files" type="file" accept=".pdf,.jpg,.jpeg,.png" multiple style={{ ...fieldStyle, padding: 9 }} /><span style={{ display: "block", marginTop: 5, color: "#927a6d", fontSize: 11 }}>Private files, PDF/JPG/PNG, up to 5 MB each. Upload only documents needed for community review.</span></div>
           <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginTop: 19, padding: "13px 14px", borderRadius: 11, background: "#f8eee5", border: "1px solid #f0dfd1" }}>
             <ShieldCheck size={18} style={{ color: "#985235", flex: "0 0 auto", marginTop: 1 }} />
             <p style={{ margin: 0, color: "#785a49", fontSize: 11, lineHeight: 1.7 }}>Typical documents may include a death certificate, applicant identity and residence proof, bank details, income certificate, and scheme-specific forms. Requirements vary. Submit sensitive documents only through the official channel when requested.</p>
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 20 }}>
             <span style={{ color: "#8b7466", fontSize: 11 }}><span style={{ color: "#b45131" }}>*</span> Required fields</span>
-            <button type="submit" className="btn btn-primary" style={{ minHeight: 44, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 9, padding: "0 19px" }}>Save request details <ArrowRight size={17} /></button>
+            <button type="submit" className="btn btn-primary" disabled={busy} style={{ minHeight: 44, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 9, padding: "0 19px" }}>{busy ? "Submitting…" : applications.some((item) => item.status === "DOCUMENTS_REQUIRED") ? "Resubmit requested documents" : "Submit request for review"} <ArrowRight size={17} /></button>
           </div>
-          {message && <div role="status" style={{ display: "flex", gap: 10, alignItems: "flex-start", marginTop: 16, padding: 13, borderRadius: 10, border: "1px solid #d9e8d9", background: "#f2f8f1", color: "#426444", fontSize: 12, lineHeight: 1.6 }}><CheckCircle size={18} style={{ flex: "0 0 auto", marginTop: 1 }} /><span>{message}</span></div>}
         </form>
       </div>
+
+      {isAdmin && <section style={{ ...panelStyle, marginBottom: 24 }}><h2 style={{ margin: "0 0 12px", color: "#452b20", fontSize: 19 }}>Assistance review queue</h2>{loading ? <p>Loading requests…</p> : applications.length ? <div style={{ display: "grid", gap: 12 }}>{applications.map((item) => <article key={item.id} style={{ border: "1px solid #ead9ce", borderRadius: 12, padding: 15 }}><div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}><strong>{item.applicantName} · {item.assistanceType}</strong><span style={{ color: "#80695c", fontSize: 11 }}>{item.scope} · {item.status} · {item.referenceNumber}</span></div><p style={{ color: "#80695c", fontSize: 12 }}>{item.district}, {item.state} · Annual income ₹{Number(item.annualIncome || 0).toLocaleString("en-IN")} · {item.memberName}</p>{item.documents?.map((doc) => <button key={doc.id} type="button" className="btn btn-outline" onClick={() => openAssistanceFile(doc.downloadUrl)}>View {doc.documentType}</button>)}{item.decisionReason && <p style={{ color: "#80695c", fontSize: 12 }}>Review note: {item.decisionReason}</p>}<div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>{["APPROVED", "REJECTED", "DOCUMENTS_REQUIRED"].map((status) => <button key={status} type="button" className={status === "APPROVED" ? "btn btn-primary" : "btn btn-outline"} disabled={busy || ["APPROVED", "REJECTED"].includes(item.status)} onClick={() => updateDecision(item.id, status)}>{status.replaceAll("_", " ")}</button>)}{item.scope === "GOVERNMENT" && <><button type="button" className="btn btn-outline" onClick={() => updateOfficialStatus(item.id, "SUBMITTED")}>Confirm official application submitted</button><button type="button" className="btn btn-outline" onClick={() => updateOfficialStatus(item.id, "APPROVED")}>Confirm official approval</button><button type="button" className="btn btn-outline" onClick={() => updateOfficialStatus(item.id, "REJECTED")}>Confirm official rejection</button></>}{(item.scope === "COMMUNITY" && item.status === "APPROVED" || item.scope === "GOVERNMENT" && ["APPROVED", "DISBURSED"].includes(item.officialStatus)) && <button type="button" className="btn btn-outline" onClick={() => setBenefitFor(item)}>Record benefit received</button>}</div>{item.benefitHistory?.map((benefit) => <div key={benefit.id} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", paddingTop: 9, fontSize: 11 }}>{benefit.benefitType} · ₹{benefit.amount ?? "Amount not listed"} · {benefit.verificationStatus}{benefit.proofUrl && <button type="button" className="btn btn-outline" onClick={() => openAssistanceFile(benefit.proofUrl)}>View proof</button>}{benefit.verificationStatus === "PENDING" && <><button type="button" className="btn btn-outline" onClick={() => verifyBenefit(benefit.id, "VERIFIED")}>Verify receipt</button><button type="button" className="btn btn-outline" onClick={() => verifyBenefit(benefit.id, "REJECTED")}>Reject receipt</button></>}</div>)}</article>)}</div> : <EmptyState title="No assistance requests yet" description="Submitted requests will appear here for authorized review." />}</section>}
+
+      {benefitFor && <div className="modal-overlay"><section className="auth-modal" role="dialog" aria-modal="true" style={{ maxHeight: "90dvh", overflowY: "auto" }}><button type="button" className="modal-close" onClick={() => setBenefitFor(null)}>×</button><h2>Record benefit received</h2><p className="auth-description">{benefitFor.memberName} · {benefitFor.assistanceType}</p><form onSubmit={submitBenefit} style={{ display: "grid", gap: 10 }}><input name="benefit_type" placeholder="Benefit type" required/><input name="amount" type="number" min="0" step="0.01" placeholder="Amount, if applicable"/><input name="received_at" type="date"/><input name="reference_number" placeholder="Reference number"/><label style={{ color: "#806b5e", fontSize: 11 }}>Proof document (optional)<input name="proof" type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display: "block", marginTop: 7 }}/></label><button type="submit" className="btn btn-primary" disabled={busy}>{busy ? "Saving…" : "Record for verification"}</button></form></section></div>}
 
       <div style={{ ...panelStyle, padding: 0, overflow: "hidden" }}>
         <div style={{ padding: "20px 22px", borderBottom: "1px solid #f0e2d8", background: "#fffaf6", display: "flex", alignItems: "center", gap: 13 }}>
@@ -3452,21 +4333,22 @@ function WidowAssistancePage() {
             <>
               <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 12, padding: 15, marginBottom: 18, borderRadius: 12, border: "1px solid #ead8c9", background: "#fffaf6" }}>
                 <div>
-                  <span style={{ display: "block", fontSize: 10, fontWeight: 800, letterSpacing: ".08em", color: "#9d6042", marginBottom: 5 }}>LOCAL RECORD REFERENCE</span>
+                  <span style={{ display: "block", fontSize: 10, fontWeight: 800, letterSpacing: ".08em", color: "#9d6042", marginBottom: 5 }}>COMMUNITY TRACKING REFERENCE</span>
                   <strong style={{ color: "#472d21", fontSize: 18, letterSpacing: ".02em" }}>{application.referenceNumber}</strong>
                 </div>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, borderRadius: 30, padding: "7px 10px", background: "#f8ebd8", color: "#8c5b22", fontSize: 11, fontWeight: 700 }}><Clock size={14} /> Recorded locally</span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, borderRadius: 30, padding: "7px 10px", background: "#f8ebd8", color: "#8c5b22", fontSize: 11, fontWeight: 700 }}><Clock size={14} /> {application.status?.replaceAll("_", " ") || "SUBMITTED"}</span>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: 12 }}>
                 {[
                   ["Applicant", application.applicantName],
                   ["Assistance type", application.assistanceType],
+                  ["Scheme source", application.scope === "COMMUNITY" ? "Potter Community" : "Central / State Government"],
                   ["Location", `${application.district}, ${application.state}`],
                   ["Approximate annual income", `₹${Number(application.annualIncome || 0).toLocaleString("en-IN")}`],
                   ["Recorded on", application.submittedAt],
-                  ["Official decision", application.decisionReason],
-                  ["Benefit / disbursement history", "No official benefit records are connected to this demo."],
-                  ["Next step", "Use the relevant official portal or department to submit and track an actual application."],
+                  ["Community review note", application.decisionReason],
+                  ["Official scheme status", application.officialStatus?.replaceAll("_", " ")],
+                  ["Official reference", application.officialReference || "Not provided"],
                 ].map(([label, value]) => (
                   <div key={label} style={{ padding: 13, border: "1px solid #efe2d8", borderRadius: 10, background: "#fff" }}>
                     <span style={{ display: "block", marginBottom: 6, color: "#8b7264", fontSize: 11 }}>{label}</span>
@@ -3474,12 +4356,13 @@ function WidowAssistancePage() {
                   </div>
                 ))}
               </div>
+              {application.benefitHistory?.length > 0 && <div style={{ marginTop: 16 }}><h3 style={{ color: "#452b20", fontSize: 15 }}>Benefit / disbursement history</h3>{application.benefitHistory.map((benefit) => <div key={benefit.id} style={{ padding: 12, marginTop: 8, border: "1px solid #efe2d8", borderRadius: 10, color: "#624b3d", fontSize: 12 }}>{benefit.benefitType} · {benefit.amount == null ? "Amount not listed" : `₹${benefit.amount}`} · {benefit.receivedAt || "Date not listed"} · {benefit.verificationStatus}</div>)}</div>}
             </>
           ) : (
             <div style={{ textAlign: "center", padding: "26px 18px 30px" }}>
               <div style={{ width: 54, height: 54, margin: "0 auto 13px", borderRadius: 16, display: "grid", placeItems: "center", background: "#f8e7da", color: "#a9512f" }}><FileText size={24} /></div>
               <h3 style={{ margin: "0 0 7px", color: "#4a3025", fontSize: 16 }}>No request details saved yet</h3>
-              
+
             </div>
           )}
         </div>
@@ -3498,6 +4381,7 @@ function DocumentsPage() {
   const [draggingDocument, setDraggingDocument] = useState(null);
   const [submissionStatus, setSubmissionStatus] = useState(null);
   const [submissionError, setSubmissionError] = useState("");
+  const [submissionBusy, setSubmissionBusy] = useState(false);
 
   const documents = [
     {
@@ -3589,7 +4473,7 @@ function DocumentsPage() {
   const selectedCount = Object.keys(uploadedDocuments).length;
   const remainingCount = documents.length - selectedCount;
 
-  const submitDocuments = (event) => {
+  const submitDocuments = async (event) => {
     event.preventDefault();
     const requiredDocuments = documents.filter((item) => item.required);
     const missingRequired = requiredDocuments.filter((item) => !uploadedDocuments[item.id]);
@@ -3599,7 +4483,23 @@ function DocumentsPage() {
       return;
     }
     setSubmissionError("");
-    setSubmissionStatus({ submittedAt: new Date().toLocaleString(), count: selectedCount });
+    setSubmissionBusy(true);
+    try {
+      const submittedAt = new Date().toLocaleString();
+      for (const item of documents) {
+        const selected = uploadedDocuments[item.id];
+        if (!selected?.file) continue;
+        const formData = new FormData();
+        formData.append("document_type", item.title);
+        formData.append("file", selected.file, selected.file.name);
+        await authApi("/verification/upload", { method: "POST", body: formData });
+      }
+      setSubmissionStatus({ submittedAt, count: selectedCount });
+    } catch (error) {
+      setSubmissionError(error.message || "Could not submit documents. Please try again.");
+    } finally {
+      setSubmissionBusy(false);
+    }
   };
 
   return (
@@ -3675,7 +4575,7 @@ function DocumentsPage() {
                     <div style={{ minWidth: 0, flex: 1 }}>
                       <div style={{ fontSize: 12, fontWeight: 650, color: "#355b3d", overflowWrap: "anywhere", lineHeight: 1.45 }}>{file.name}</div>
                       <div style={{ marginTop: 3, fontSize: 11, color: "#627966" }}>{formatFileSize(file.size)} · Selected {selected.selectedAt}</div>
-                      <div style={{ display: "inline-flex", alignItems: "center", gap: 5, marginTop: 7, padding: "3px 7px", borderRadius: 999, background: submissionStatus ? "#fbf2df" : "#e9f2ea", color: submissionStatus ? "#87621b" : "#39734a", fontSize: 10, fontWeight: 700 }}><CheckCircle size={12} /> {submissionStatus ? "Included in local submission demo" : "Selected locally · not submitted"}</div>
+                      <div style={{ display: "inline-flex", alignItems: "center", gap: 5, marginTop: 7, padding: "3px 7px", borderRadius: 999, background: submissionStatus ? "#fbf2df" : "#e9f2ea", color: submissionStatus ? "#87621b" : "#39734a", fontSize: 10, fontWeight: 700 }}><CheckCircle size={12} /> {submissionStatus ? "Submitted for administrator review" : "Selected locally · not submitted"}</div>
                     </div>
                   </div>
                   <div style={{ display: "flex", justifyContent: "flex-end", flexWrap: "wrap", gap: 10, marginTop: 10, paddingTop: 9, borderTop: "1px solid #dfe9e0" }}>
@@ -3715,8 +4615,8 @@ function DocumentsPage() {
           <div style={{ minWidth: 0, flex: 1 }}>
             <h3 style={{ margin: "0 0 5px", fontSize: 16, color: "#503326" }}>Ready to submit your documents?</h3>
           </div>
-          <button type="submit" disabled={documents.some((item) => item.required && !uploadedDocuments[item.id])} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "12px 18px", border: 0, borderRadius: 9, background: documents.some((item) => item.required && !uploadedDocuments[item.id]) ? "#d8c6bb" : "#a95736", color: "#fff", fontWeight: 700, fontSize: 13, cursor: documents.some((item) => item.required && !uploadedDocuments[item.id]) ? "not-allowed" : "pointer", flexShrink: 0 }}>
-            {submissionStatus ? "Submit updated documents" : "Submit documents for verification"} <ArrowRight size={16} />
+          <button type="submit" disabled={submissionBusy || documents.some((item) => item.required && !uploadedDocuments[item.id])} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "12px 18px", border: 0, borderRadius: 9, background: documents.some((item) => item.required && !uploadedDocuments[item.id]) ? "#d8c6bb" : "#a95736", color: "#fff", fontWeight: 700, fontSize: 13, cursor: documents.some((item) => item.required && !uploadedDocuments[item.id]) || submissionBusy ? "not-allowed" : "pointer", flexShrink: 0 }}>
+            {submissionBusy ? "Submitting…" : submissionStatus ? "Submit updated documents" : "Submit documents for verification"} <ArrowRight size={16} />
           </button>
         </div>
         {submissionError && <p role="alert" style={{ margin: "10px 0 0", color: "#b42318", fontSize: 12 }}>{submissionError}</p>}
@@ -3833,43 +4733,42 @@ function EmergencyPage() {
 ========================================================= */
 
 function NotificationsPage() {
-  const notifications = [
-    [
-      "New Community Announcement",
-      "A new announcement has been published.",
-      "10 minutes ago",
-    ],
-    [
-      "Upcoming Event",
-      "Potter Community Annual Gathering is coming up.",
-      "2 hours ago",
-    ],
-    [
-      "New Government Scheme",
-      "A new support scheme may be relevant to you.",
-      "Yesterday",
-    ],
-    [
-      "Scholarship Opportunity",
-      "A new scholarship opportunity has been added.",
-      "Yesterday",
-    ],
-    [
-      "Marketplace Update",
-      "New artisan products are now available.",
-      "2 days ago",
-    ],
-    [
-      "Community Event Reminder",
-      "You have an upcoming community event.",
-      "3 days ago",
-    ],
-    [
-      "Matrimonial Match",
-      "A profile matching your preferences is available.",
-      "5 days ago",
-    ],
-  ];
+  const [notifications, setNotifications] = useState([]);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  const loadNotifications = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const rows = await authApi("/notifications");
+      setNotifications(Array.isArray(rows) ? rows : []);
+    } catch (loadError) {
+      setError(loadError.message || "Could not load notifications.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadNotifications(); }, []);
+
+  const markAllRead = async () => {
+    try {
+      await authApi("/notifications/read-all", { method: "PATCH" });
+      await loadNotifications();
+    } catch (loadError) {
+      setError(loadError.message || "Could not update notifications.");
+    }
+  };
+
+  const markRead = async (id) => {
+    try {
+      await authApi(`/notifications/${id}/read`, { method: "PATCH" });
+      setNotifications((items) => items.map((item) => item.id === id ? { ...item, is_read: true } : item));
+    } catch (loadError) {
+      setError(loadError.message || "Could not update this notification.");
+    }
+  };
 
   return (
     <PageWrapper>
@@ -3878,26 +4777,32 @@ function NotificationsPage() {
         description="Your personalized community updates."
       />
 
-      <div className="notification-list">
-        {notifications.map(
-          ([title, text, time]) => (
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}><button type="button" className="btn btn-outline" onClick={markAllRead} disabled={!notifications.some((item) => !item.is_read)}>Mark all as read</button></div>
+      {error && <div role="alert" className="empty-state">{error}</div>}
+      {loading ? <div className="empty-state">Loading notifications…</div> : null}
+
+      {!loading && !error && notifications.length === 0 ? <EmptyState title="No notifications yet" description="Membership decisions and future community updates will appear here." /> : null}
+      {!loading && notifications.length > 0 && <div className="notification-list">
+        {notifications.map((item) => (
             <div
               className="notification-card"
-              key={title}
+              key={item.id}
+              style={{ opacity: item.is_read ? 0.72 : 1 }}
             >
               <div className="notification-icon">
                 <Bell size={19} />
               </div>
 
               <div>
-                <h3>{title}</h3>
-                <p>{text}</p>
-                <span>{time}</span>
+                <h3>{item.title}</h3>
+                <p>{item.message}</p>
+                <span>{new Date(item.created_at).toLocaleString()}</span>
               </div>
+              {!item.is_read && <button type="button" className="btn btn-outline" onClick={() => markRead(item.id)}>Mark read</button>}
             </div>
           )
         )}
-      </div>
+      </div>}
     </PageWrapper>
   );
 }
@@ -3905,14 +4810,6 @@ function NotificationsPage() {
 /* =========================================================
    PROFILE
 ========================================================= */
-
-function generateUniqueMembershipId() {
-  const year = new Date().getFullYear();
-  const counterKey = `potterMembershipCounter-${year}`;
-  const counter = Number(localStorage.getItem(counterKey) || "0") + 1;
-  localStorage.setItem(counterKey, String(counter));
-  return `POT-${year}-${String(counter).padStart(6, "0")}`;
-}
 
 function getStoredProfile() {
   const saved = localStorage.getItem("potterProfile");
@@ -3922,33 +4819,57 @@ function getStoredProfile() {
     try {
       profile = JSON.parse(saved);
     } catch {
-      // Fall back to the default profile below.
+      // Ignore invalid local profile data and rebuild it below.
+      profile = null;
     }
   }
 
   if (!profile) {
     profile = {
-      fullName: "Suraj Kumar",
+      fullName: "",
       email: "",
       phone: "",
       dateOfBirth: "",
       gender: "",
-      occupation: "Student",
+      occupation: "",
       artisanStatus: "",
       specialization: "",
       address: "",
       permanentAddress: "",
       correspondenceAddress: "",
-      city: "Bengaluru",
-      state: "Karnataka",
+      city: "",
+      state: "",
       pincode: "",
       bloodGroup: "",
       referralMemberName: "",
       referralMembershipId: "",
       bio: "",
       profilePhoto: "",
-      membershipStatus: "APPROVED",
+      membershipStatus: "PENDING",
     };
+  }
+
+  // Prefer the authenticated backend user over old demo/local profile data.
+  try {
+    const savedUser = sessionStorage.getItem("potterCommunityUser");
+
+    if (savedUser) {
+      const user = JSON.parse(savedUser);
+
+      profile = {
+        ...profile,
+        fullName: user.full_name ?? user.fullName ?? profile.fullName,
+        email: user.email ?? profile.email,
+        phone: user.phone_number ?? user.phone ?? profile.phone,
+        membershipStatus:
+          user.membership_status ?? profile.membershipStatus,
+        membershipId:
+          user.membership_number ?? profile.membershipId ?? "",
+        role: user.role ?? profile.role,
+      };
+    }
+  } catch {
+    // Keep the local profile if session user data is unavailable.
   }
 
   // Add fields introduced by the registration specification to existing local profiles.
@@ -3957,11 +4878,10 @@ function getStoredProfile() {
   profile.bloodGroup ??= "";
   profile.referralMemberName ??= "";
   profile.referralMembershipId ??= "";
-  // This prototype currently labels the signed-in demo member as verified.
-  // Generate the ID once for approved members and keep it stable in local storage.
-  if (!profile.membershipStatus) profile.membershipStatus = "APPROVED";
-  if (profile.membershipStatus === "APPROVED" && !profile.membershipId) {
-    profile.membershipId = generateUniqueMembershipId();
+  // Membership status and membership ID are controlled by the backend.
+  // Never auto-approve or generate a membership ID in the browser.
+  if (!profile.membershipStatus) {
+    profile.membershipStatus = "PENDING";
   }
 
   localStorage.setItem("potterProfile", JSON.stringify(profile));
@@ -4410,7 +5330,7 @@ function ProfilePage() {
             </p>
 
             <span className="membership-id">
-              Membership ID: {profile.membershipStatus === "APPROVED" ? profile.membershipId : "Assigned after approval"}
+              Membership ID: {membershipStatus === "APPROVED" ? profile.membershipId : "Assigned after approval"}
             </span>
           </div>
 
@@ -4437,17 +5357,134 @@ function ProfilePage() {
 
           <ProfileDetail
             label="Status"
-            value={profile.membershipStatus === "APPROVED" ? "Approved Member" : "Pending Verification"}
+            value={membershipStatus === "APPROVED" ? "Approved Member" : "Pending Verification"}
           />
 
           <ProfileDetail
             label="Membership ID"
-            value={profile.membershipStatus === "APPROVED" ? profile.membershipId : "Assigned after approval"}
+            value={membershipStatus === "APPROVED" ? profile.membershipId : "Assigned after approval"}
           />
         </div>
+
+        <FamilyMembersPanel />
       </div>
     </PageWrapper>
   );
+}
+
+function FamilyMembersPanel() {
+  const [familyMembers, setFamilyMembers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  const loadFamilyMembers = async () => {
+    setError("");
+    try {
+      const rows = await authApi("/family-members");
+      setFamilyMembers(Array.isArray(rows) ? rows : []);
+    } catch (loadError) {
+      setError(loadError.message || "Could not load family members.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadFamilyMembers(); }, []);
+
+  const addFamilyMember = async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    const formData = new FormData(event.currentTarget);
+    const values = Object.fromEntries(formData.entries());
+    for (const key of Object.keys(values)) if (values[key] === "") values[key] = null;
+    try {
+      await authApi("/family-members", { method: "POST", body: JSON.stringify(values) });
+      form.reset();
+      setNotice("Family member added and sent for individual verification.");
+      await loadFamilyMembers();
+    } catch (saveError) {
+      setError(saveError.message || "Could not add this family member.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteFamilyMember = async (id) => {
+    try {
+      await authApi(`/family-members/${id}`, { method: "DELETE" });
+      await loadFamilyMembers();
+    } catch (deleteError) {
+      setError(deleteError.message || "Could not remove this family member.");
+    }
+  };
+
+  return (
+    <section style={{ marginTop: 22, padding: 20, border: "1px solid #ead8cc", borderRadius: 14, background: "#fffdfb" }}>
+      <div style={{ marginBottom: 15 }}><span style={{ color: "#a95736", fontSize: 10, fontWeight: 800, letterSpacing: ".12em" }}>HOUSEHOLD</span><h2 style={{ margin: "5px 0", color: "#503326", fontSize: 19 }}>Family members</h2><p style={{ margin: 0, color: "#806b5e", fontSize: 12 }}>Each family member has an independent verification status and membership record.</p></div>
+      <form onSubmit={addFamilyMember} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10, padding: 14, border: "1px solid #f0e2d8", borderRadius: 11 }}>
+        <input name="full_name" required minLength={2} maxLength={160} placeholder="Full name" aria-label="Family member full name" style={{ padding: 10, border: "1px solid #ddc9b7", borderRadius: 8, color: "#503326" }} />
+        <select name="relationship" required defaultValue="" aria-label="Relationship" style={{ padding: 10, border: "1px solid #ddc9b7", borderRadius: 8, color: "#503326", background: "#fffdfb" }}><option value="" disabled>Relationship</option>{["Spouse", "Child", "Parent", "Sibling", "Other"].map((item) => <option key={item}>{item}</option>)}</select>
+        <input name="date_of_birth" type="date" aria-label="Date of birth" style={{ padding: 10, border: "1px solid #ddc9b7", borderRadius: 8, color: "#503326" }} />
+        <select name="gender" defaultValue="" aria-label="Gender" style={{ padding: 10, border: "1px solid #ddc9b7", borderRadius: 8, color: "#503326", background: "#fffdfb" }}><option value="">Gender (optional)</option>{["Female", "Male", "Non-binary", "Prefer not to say"].map((item) => <option key={item}>{item}</option>)}</select>
+        <input name="phone_number" type="tel" maxLength={20} placeholder="Phone (optional)" aria-label="Family member phone" style={{ padding: 10, border: "1px solid #ddc9b7", borderRadius: 8, color: "#503326" }} />
+        <input name="email" type="email" maxLength={255} placeholder="Email (optional)" aria-label="Family member email" style={{ padding: 10, border: "1px solid #ddc9b7", borderRadius: 8, color: "#503326" }} />
+        <button type="submit" className="btn btn-primary" disabled={busy}>{busy ? "Adding…" : "Add family member"} <Plus size={15} /></button>
+      </form>
+      {error && <p role="alert" style={{ color: "#a13d2d", fontSize: 12 }}>{error}</p>}
+      {notice && <p role="status" style={{ color: "#39734a", fontSize: 12 }}>{notice}</p>}
+      <div style={{ display: "grid", gap: 8, marginTop: 13 }}>
+        {loading ? <p style={{ color: "#806b5e", fontSize: 12 }}>Loading family members…</p> : familyMembers.length ? familyMembers.map((member) => <div key={member.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: 12, border: "1px solid #efe2d8", borderRadius: 9 }}><div><strong style={{ color: "#503326" }}>{member.full_name}</strong><div style={{ color: "#806b5e", fontSize: 11, marginTop: 3 }}>{member.relationship}{member.date_of_birth ? ` · DOB ${member.date_of_birth}` : ""} · {member.membership_status}{member.membership_number ? ` · ${member.membership_number}` : ""}</div>{member.admin_remark && <div style={{ color: "#806b5e", fontSize: 11, marginTop: 3 }}>Review note: {member.admin_remark}</div>}</div>{member.membership_status !== "APPROVED" && <button type="button" className="btn btn-outline" onClick={() => deleteFamilyMember(member.id)}>Remove</button>}</div>) : <p style={{ color: "#806b5e", fontSize: 12 }}>No family members added yet.</p>}
+      </div>
+    </section>
+  );
+}
+
+function FamilyReviewQueue() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState(null);
+  const [error, setError] = useState("");
+
+  const loadItems = async () => {
+    setError("");
+    try {
+      const rows = await authApi("/family-members/admin/pending");
+      setItems(Array.isArray(rows) ? rows : []);
+    } catch (loadError) {
+      setError(loadError.message || "Could not load family membership requests.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadItems(); }, []);
+
+  const decide = async (id, status) => {
+    setBusyId(id);
+    setError("");
+    try {
+      await authApi(`/family-members/admin/${id}/review`, {
+        method: "PATCH",
+        body: JSON.stringify({ status, admin_remark: null }),
+      });
+      await loadItems();
+    } catch (reviewError) {
+      setError(reviewError.message || "Could not update family member status.");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return <section style={{ margin: "18px 0", padding: 18, border: "1px solid #ead8cc", borderRadius: 14, background: "#fffdfb" }}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}><div><h2 style={{ margin: "0 0 5px", color: "#503326", fontSize: 19 }}>Family membership review</h2><p style={{ margin: 0, color: "#806b5e", fontSize: 12 }}>Review family members independently from the primary member.</p></div><button type="button" className="btn btn-outline" onClick={loadItems} disabled={loading}>Refresh</button></div>
+    {error && <p role="alert" style={{ color: "#a13d2d", fontSize: 12 }}>{error}</p>}
+    {loading ? <p style={{ color: "#806b5e", fontSize: 12 }}>Loading family requests…</p> : items.length ? <div style={{ display: "grid", gap: 8, marginTop: 12 }}>{items.map((item) => <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: 12, border: "1px solid #efe2d8", borderRadius: 9 }}><div><strong style={{ color: "#503326" }}>{item.full_name}</strong><div style={{ color: "#806b5e", fontSize: 11, marginTop: 3 }}>{item.relationship} · Under {item.primary_member_name}{item.primary_membership_number ? ` (${item.primary_membership_number})` : ""}{item.date_of_birth ? ` · DOB ${item.date_of_birth}` : ""}</div><div style={{ color: "#806b5e", fontSize: 11 }}>{item.phone_number || "No phone provided"}{item.email ? ` · ${item.email}` : ""}</div></div><div style={{ display: "flex", gap: 8 }}><button type="button" className="btn btn-outline" onClick={() => decide(item.id, "REJECTED")} disabled={busyId !== null}>{busyId === item.id ? "Saving…" : "Reject"}</button><button type="button" className="btn btn-primary" onClick={() => decide(item.id, "APPROVED")} disabled={busyId !== null}>Approve</button></div></div>)}</div> : <p style={{ marginTop: 14, color: "#806b5e", fontSize: 12 }}>No pending family member requests.</p>}
+  </section>;
 }
 
 function ProfileDetail({ label, value }) {
@@ -4463,15 +5500,318 @@ function ProfileDetail({ label, value }) {
    SETTINGS
 ========================================================= */
 
-function SettingsPage() {
+function CommunityRecordsPage({ activeUser }) {
+  const [records, setRecords] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState({ record_type: "NOTICE", title: "", content: "", scheduled_at: "", venue: "" });
+  const isAdmin = String(activeUser?.role || "").toUpperCase() === "ADMIN";
+  const canManage = isAdmin || activeUser?.permissions?.includes("community.records.manage");
+  const canApprove = isAdmin || activeUser?.permissions?.includes("community.approve");
+
+  const loadRecords = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const result = await authApi("/community/records");
+      setRecords(Array.isArray(result) ? result : []);
+    } catch (loadError) {
+      setError(loadError.message || "Could not load community records.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadRecords(); }, []);
+
+  const saveRecord = async (event, submitForApproval) => {
+    event?.preventDefault();
+    setError("");
+    setNotice("");
+    setBusy(true);
+    const payload = {
+      ...form,
+      scheduled_at: form.scheduled_at ? new Date(form.scheduled_at).toISOString() : null,
+      venue: form.venue.trim() || null,
+      submit_for_approval: submitForApproval,
+    };
+    try {
+      await authApi(editingId ? `/community/records/${editingId}` : "/community/records", {
+        method: editingId ? "PATCH" : "POST",
+        body: JSON.stringify(payload),
+      });
+      setNotice(submitForApproval ? "Saved and sent to the President for approval." : "Draft saved.");
+      setForm({ record_type: "NOTICE", title: "", content: "", scheduled_at: "", venue: "" });
+      setEditingId(null);
+      await loadRecords();
+    } catch (saveError) {
+      setError(saveError.message || "Could not save this community record.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const editRecord = (record) => {
+    let scheduledAt = "";
+    if (record.scheduled_at) {
+      const localDate = new Date(new Date(record.scheduled_at).getTime() - new Date(record.scheduled_at).getTimezoneOffset() * 60_000);
+      scheduledAt = localDate.toISOString().slice(0, 16);
+    }
+    setForm({ record_type: record.record_type, title: record.title, content: record.content, scheduled_at: scheduledAt, venue: record.venue || "" });
+    setEditingId(record.id);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const deleteRecord = async (record) => {
+    if (!window.confirm(`Delete the draft “${record.title}”?`)) return;
+    setBusy(true);
+    setError("");
+    try {
+      await authApi(`/community/records/${record.id}`, { method: "DELETE" });
+      setNotice("Draft deleted.");
+      await loadRecords();
+    } catch (deleteError) {
+      setError(deleteError.message || "Could not delete this draft.");
+    } finally { setBusy(false); }
+  };
+
+  const decideRecord = async (record, decision) => {
+    const remark = decision === "REJECTED" ? window.prompt("Please give a reason for rejecting this record.") : "";
+    if (decision === "REJECTED" && (!remark || remark.trim().length < 3)) return;
+    setBusy(true);
+    setError("");
+    try {
+      await authApi(`/community/records/${record.id}/decision`, { method: "PATCH", body: JSON.stringify({ decision, remark: remark || null }) });
+      setNotice(decision === "APPROVED" ? "Record approved and published." : "Record returned to the author with your reason.");
+      await loadRecords();
+    } catch (decisionError) {
+      setError(decisionError.message || "Could not update this record.");
+    } finally { setBusy(false); }
+  };
+
+  const recordStyle = (status) => ({ display: "inline-flex", borderRadius: 99, padding: "5px 9px", background: status === "PUBLISHED" ? "#eaf2e5" : status === "PENDING_APPROVAL" ? "#fff1d8" : status === "REJECTED" ? "#fbe8e5" : "#f0e9e3", color: status === "PUBLISHED" ? "#4c7043" : status === "REJECTED" ? "#a13d2d" : "#79563d", fontSize: 10, fontWeight: 800 });
+
+  return <PageWrapper>
+    <PageHeader title="Meetings & Official Records" description="The Secretary maintains notices, meeting records, minutes, and day-to-day community activities. Committee actions are timestamped and reviewed by the President." />
+    {error && <p role="alert" style={{ color: "#a13d2d", fontSize: 12 }}>{error}</p>}
+    {notice && <p role="status" style={{ color: "#39734a", fontSize: 12 }}>{notice}</p>}
+    {canManage && <section style={{ margin: "16px 0", padding: 18, border: "1px solid #ead8cc", borderRadius: 14, background: "#fffdfb" }}>
+      <h2 style={{ margin: "0 0 12px", color: "#503326", fontSize: 18 }}>{editingId ? "Edit community record" : "Create a notice or official record"}</h2>
+      <form onSubmit={(event) => saveRecord(event, true)} style={{ display: "grid", gap: 11 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 10 }}>
+          <label style={{ display: "grid", gap: 5, color: "#806b5e", fontSize: 11 }}>Record type<select value={form.record_type} onChange={(event) => setForm({ ...form, record_type: event.target.value })} style={{ padding: 10, border: "1px solid #ddc9b7", borderRadius: 8, background: "#fffdfb" }}>{[["NOTICE", "Notice"], ["MEETING", "Meeting"], ["MINUTES", "Meeting minutes"], ["ACTIVITY", "Day-to-day activity"]].map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label style={{ display: "grid", gap: 5, color: "#806b5e", fontSize: 11 }}>Date and time (if applicable)<input type="datetime-local" value={form.scheduled_at} onChange={(event) => setForm({ ...form, scheduled_at: event.target.value })} style={{ padding: 10, border: "1px solid #ddc9b7", borderRadius: 8, background: "#fffdfb" }} /></label>
+          <label style={{ display: "grid", gap: 5, color: "#806b5e", fontSize: 11 }}>Venue or record reference<input value={form.venue} onChange={(event) => setForm({ ...form, venue: event.target.value })} maxLength={255} placeholder="Venue, meeting reference, or location" style={{ padding: 10, border: "1px solid #ddc9b7", borderRadius: 8, background: "#fffdfb" }} /></label>
+        </div>
+        <input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} minLength={3} maxLength={160} required placeholder="Record title" style={{ padding: 11, border: "1px solid #ddc9b7", borderRadius: 8, background: "#fffdfb" }} />
+        <textarea value={form.content} onChange={(event) => setForm({ ...form, content: event.target.value })} minLength={5} maxLength={5000} required rows={4} placeholder="Notice details, agenda, decisions, minutes, or activity record" style={{ padding: 11, border: "1px solid #ddc9b7", borderRadius: 8, background: "#fffdfb", resize: "vertical" }} />
+        <div style={{ display: "flex", gap: 9, flexWrap: "wrap" }}><button type="button" className="btn btn-outline" disabled={busy} onClick={() => saveRecord(null, false)}>{busy ? "Saving…" : "Save draft"}</button><button type="submit" className="btn btn-primary" disabled={busy}>{busy ? "Sending…" : "Submit to President"}</button>{editingId && <button type="button" className="btn btn-outline" onClick={() => { setEditingId(null); setForm({ record_type: "NOTICE", title: "", content: "", scheduled_at: "", venue: "" }); }}>Cancel edit</button>}</div>
+      </form>
+    </section>}
+    <section style={{ display: "grid", gap: 10, marginTop: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}><h2 style={{ margin: 0, color: "#503326", fontSize: 18 }}>{canApprove ? "Records awaiting your approval and published records" : "Community records"}</h2><button type="button" className="btn btn-outline" disabled={loading} onClick={loadRecords}>{loading ? "Refreshing…" : "Refresh"}</button></div>
+      {loading ? <div className="empty-state">Loading community records…</div> : records.length ? records.map((record) => <article key={record.id} style={{ padding: 16, border: "1px solid #ead8cc", borderRadius: 13, background: "#fffdfb" }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}><div><span style={{ color: "#a65335", fontSize: 10, fontWeight: 900, letterSpacing: ".1em" }}>{record.record_type.replaceAll("_", " ")}</span><h3 style={{ margin: "5px 0", color: "#503326", fontSize: 16 }}>{record.title}</h3></div><span style={recordStyle(record.status)}>{record.status.replaceAll("_", " ")}</span></div><p style={{ whiteSpace: "pre-wrap", color: "#6f5b4e", fontSize: 12, lineHeight: 1.7 }}>{record.content}</p><div style={{ display: "flex", gap: 12, flexWrap: "wrap", color: "#806b5e", fontSize: 10 }}><span>Recorded by {record.created_by}</span><span>Updated {new Date(record.updated_at).toLocaleString()}</span>{record.scheduled_at && <span>{new Date(record.scheduled_at).toLocaleString()}</span>}{record.venue && <span>{record.venue}</span>}</div>{record.approval_remark && <p style={{ color: "#a13d2d", fontSize: 11, marginBottom: 0 }}>Review note: {record.approval_remark}</p>}{canApprove && record.status === "PENDING_APPROVAL" && <div style={{ display: "flex", gap: 8, marginTop: 12 }}><button type="button" className="btn btn-primary" disabled={busy} onClick={() => decideRecord(record, "APPROVED")}>Approve & publish</button><button type="button" className="btn btn-outline" disabled={busy} onClick={() => decideRecord(record, "REJECTED")}>Reject with reason</button></div>}{canManage && record.created_by_id === activeUser?.id && ["DRAFT", "REJECTED"].includes(record.status) && <div style={{ display: "flex", gap: 8, marginTop: 12 }}><button type="button" className="btn btn-outline" onClick={() => editRecord(record)}>Edit</button><button type="button" className="btn btn-outline" disabled={busy} onClick={() => deleteRecord(record)}>Delete draft</button></div>}</article>) : <EmptyState title="No community records yet" description="Notices, meeting minutes, and activities will appear here when recorded." />}
+    </section>
+  </PageWrapper>;
+}
+
+function SettingsPage({ activeUser, committeeOnly = false }) {
+  const [roles, setRoles] = useState([]);
+  const [roleUsers, setRoleUsers] = useState([]);
+  const [roleAssignments, setRoleAssignments] = useState([]);
+  const [roleLoading, setRoleLoading] = useState(false);
+  const [roleError, setRoleError] = useState("");
+  const [roleNotice, setRoleNotice] = useState("");
+  const [activityLogs, setActivityLogs] = useState([]);
+  const [activityError, setActivityError] = useState("");
+  const [editingRoleId, setEditingRoleId] = useState(null);
+  const [roleDraft, setRoleDraft] = useState({ name: "", description: "", permissions: [], is_active: true });
+  const [assignmentTermStart, setAssignmentTermStart] = useState("");
+  const [assignmentTermEnd, setAssignmentTermEnd] = useState("");
+  const [assignmentMinutesReference, setAssignmentMinutesReference] = useState("");
+  const canManageRoles = String(activeUser?.role || "").toUpperCase() === "ADMIN" || activeUser?.permissions?.includes("roles.manage");
+  const permissionOptions = [
+    ["membership.view", "View member status"],
+    ["membership.review", "Review membership applications"],
+    ["documents.review", "Review verification documents"],
+    ["members.manage", "Manage member records"],
+    ["events.manage", "Manage events"],
+    ["announcements.manage", "Manage announcements"],
+    ["scholarships.review", "Review scholarships"],
+    ["matrimonial.review", "Review matrimonial applications"],
+    ["finance.manage", "Manage finance records"],
+    ["reports.view", "View reports"],
+    ["community.records.view", "View official community records"],
+    ["community.records.manage", "Create community records and meeting minutes"],
+    ["community.approve", "Approve committee notices and decisions"],
+    ["marketplace.manage", "Manage marketplace engagement"],
+    ["roles.manage", "Manage roles and assignments"],
+  ];
+
+  const loadRoleManagement = async () => {
+    if (!canManageRoles) return;
+    setRoleLoading(true);
+    setRoleError("");
+    try {
+      const [roleRows, userRows, assignmentRows] = await Promise.all([
+        authApi("/admin/roles"),
+        authApi("/admin/roles/users"),
+        authApi("/admin/roles/assignments"),
+      ]);
+      setRoles(Array.isArray(roleRows) ? roleRows : []);
+      setRoleUsers(Array.isArray(userRows) ? userRows : []);
+      setRoleAssignments(Array.isArray(assignmentRows) ? assignmentRows : []);
+    } catch (error) {
+      setRoleError(error.message || "Could not load role management.");
+    } finally {
+      setRoleLoading(false);
+    }
+  };
+
+  const loadActivityLogs = async () => {
+    if (!["ADMIN", "SUPER ADMIN"].includes(String(activeUser?.role || "").toUpperCase())) return;
+    setActivityError("");
+    try {
+      const rows = await authApi("/admin/audit-logs?limit=100");
+      setActivityLogs(Array.isArray(rows) ? rows : []);
+    } catch (error) {
+      setActivityError(error.message || "Could not load activity history.");
+    }
+  };
+
+  useEffect(() => { loadRoleManagement(); loadActivityLogs(); }, [canManageRoles, activeUser?.role]);
+
+  const saveRole = async (event) => {
+    event.preventDefault();
+    setRoleError("");
+    setRoleNotice("");
+    const method = editingRoleId ? "PATCH" : "POST";
+    const path = editingRoleId ? `/admin/roles/${editingRoleId}` : "/admin/roles";
+    try {
+      await authApi(path, {
+        method,
+        body: JSON.stringify(roleDraft),
+      });
+      setRoleNotice(editingRoleId ? "Role updated." : "Role created.");
+      setEditingRoleId(null);
+      setRoleDraft({ name: "", description: "", permissions: [], is_active: true });
+      await loadRoleManagement();
+    } catch (error) {
+      setRoleError(error.message || "Could not save this role.");
+    }
+  };
+
+  const editRole = (role) => {
+    setEditingRoleId(role.id);
+    setRoleDraft({ name: role.name, description: role.description || "", permissions: role.permissions || [], is_active: role.is_active });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const assignRole = async (userId, roleId) => {
+    if (!roleId) return;
+    setRoleError("");
+    setRoleNotice("");
+    try {
+      await authApi(`/admin/roles/members/${userId}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          role_id: Number(roleId),
+          term_start: assignmentTermStart || null,
+          term_end: assignmentTermEnd || null,
+          minutes_reference: assignmentMinutesReference.trim() || null,
+        }),
+      });
+      setRoleNotice("Committee role assigned.");
+      await loadRoleManagement();
+    } catch (error) {
+      setRoleError(error.message || "Could not assign this role.");
+    }
+  };
+
+  const revokeRole = async (user) => {
+    const reason = window.prompt(`Reason for ending ${user.full_name}'s committee role?`);
+    if (!reason || reason.trim().length < 3) return;
+    setRoleError("");
+    setRoleNotice("");
+    try {
+      await authApi(`/admin/roles/members/${user.id}/revoke`, {
+        method: "PATCH",
+        body: JSON.stringify({ reason: reason.trim() }),
+      });
+      setRoleNotice("Committee role ended and recorded in assignment history.");
+      await loadRoleManagement();
+    } catch (error) {
+      setRoleError(error.message || "Could not revoke this role.");
+    }
+  };
+
   return (
     <PageWrapper>
       <PageHeader
-        title="Settings"
-        description="Manage your account preferences."
+        title={committeeOnly ? "Committee & Roles" : "Settings"}
+        description={committeeOnly ? "Assign committee roles and manage future role needs." : "Manage your account preferences."}
       />
 
-      <div className="settings-card">
+      {canManageRoles && <section style={{ marginBottom: 20, padding: 18, border: "1px solid #ead8cc", borderRadius: 14, background: "#fffdfb" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <div><h2 style={{ margin: "0 0 5px", color: "#503326", fontSize: 19 }}>Roles & committee assignments</h2><p style={{ margin: 0, color: "#806b5e", fontSize: 12 }}>Create roles as committee needs change, set their permissions, and assign them to approved members.</p></div>
+          <button type="button" className="btn btn-outline" onClick={loadRoleManagement} disabled={roleLoading}>{roleLoading ? "Refreshing…" : "Refresh"}</button>
+        </div>
+
+        <details style={{ marginTop: 14, padding: 12, border: "1px solid #f0e2d8", borderRadius: 11 }}>
+        <summary style={{ color: "#624b3d", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Create or edit a committee role</summary>
+        <form onSubmit={saveRole} style={{ display: "grid", gap: 12, marginTop: 12, padding: 14, border: "1px solid #f0e2d8", borderRadius: 11 }}>
+          <h3 style={{ margin: 0, color: "#503326", fontSize: 15 }}>{editingRoleId ? "Edit role" : "Create a role"}</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+            <input aria-label="Role name" required minLength={2} maxLength={100} value={roleDraft.name} onChange={(event) => setRoleDraft({ ...roleDraft, name: event.target.value })} placeholder="e.g. Potter Market Engagement Coordinator" style={{ padding: 11, border: "1px solid #ddc9b7", borderRadius: 8, color: "#503326" }} />
+            <input aria-label="Role description" maxLength={255} value={roleDraft.description} onChange={(event) => setRoleDraft({ ...roleDraft, description: event.target.value })} placeholder="Role responsibilities" style={{ padding: 11, border: "1px solid #ddc9b7", borderRadius: 8, color: "#503326" }} />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 8 }}>
+            {permissionOptions.map(([permission, label]) => <label key={permission} style={{ display: "flex", gap: 8, alignItems: "center", padding: "8px 10px", border: "1px solid #efe2d8", borderRadius: 8, color: "#624b3d", fontSize: 12 }}><input type="checkbox" checked={roleDraft.permissions.includes(permission)} onChange={(event) => setRoleDraft({ ...roleDraft, permissions: event.target.checked ? [...roleDraft.permissions, permission] : roleDraft.permissions.filter((item) => item !== permission) })} />{label}</label>)}
+          </div>
+          <label style={{ display: "flex", gap: 8, alignItems: "center", color: "#624b3d", fontSize: 12 }}><input type="checkbox" checked={roleDraft.is_active} onChange={(event) => setRoleDraft({ ...roleDraft, is_active: event.target.checked })} />Role is active</label>
+          <div style={{ display: "flex", gap: 9, flexWrap: "wrap" }}><button type="submit" className="btn btn-primary">{editingRoleId ? "Save role" : "Create role"}</button>{editingRoleId && <button type="button" className="btn btn-outline" onClick={() => { setEditingRoleId(null); setRoleDraft({ name: "", description: "", permissions: [], is_active: true }); }}>Cancel</button>}</div>
+        </form>
+        </details>
+
+        {roleError && <p role="alert" style={{ color: "#a13d2d", fontSize: 12 }}>{roleError}</p>}
+        {roleNotice && <p role="status" style={{ color: "#39734a", fontSize: 12 }}>{roleNotice}</p>}
+
+        <div style={{ display: "grid", gap: 9, marginTop: 14 }}>
+          {roles.map((role) => <div key={role.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: 12, border: "1px solid #efe2d8", borderRadius: 9 }}><div><strong style={{ color: "#503326" }}>{role.name}</strong><div style={{ color: "#806b5e", fontSize: 11, marginTop: 3 }}>{role.description || "No description"} · {role.users_count} assigned · {role.is_active ? "Active" : "Inactive"}</div><div style={{ color: "#806b5e", fontSize: 11, marginTop: 3 }}>Permissions: {(role.permissions || []).length ? role.permissions.join(", ") : "None"}</div></div><button type="button" className="btn btn-outline" onClick={() => editRole(role)}>Edit</button></div>)}
+        </div>
+
+        <h3 style={{ margin: "20px 0 8px", color: "#503326", fontSize: 15 }}>Assign or end a role for an approved member</h3>
+        <details style={{ margin: "10px 0 13px", padding: 10, border: "1px solid #f0e2d8", borderRadius: 9 }}>
+        <summary style={{ color: "#806b5e", fontSize: 11, cursor: "pointer" }}>Optional term dates and meeting reference</summary>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 9, marginTop: 10 }}>
+          <label style={{ display: "grid", gap: 5, color: "#806b5e", fontSize: 11 }}>Term starts<input type="date" value={assignmentTermStart} onChange={(event) => setAssignmentTermStart(event.target.value)} style={{ padding: 9, border: "1px solid #ddc9b7", borderRadius: 8, background: "#fffdfb" }} /></label>
+          <label style={{ display: "grid", gap: 5, color: "#806b5e", fontSize: 11 }}>Term ends<input type="date" min={assignmentTermStart || undefined} value={assignmentTermEnd} onChange={(event) => setAssignmentTermEnd(event.target.value)} style={{ padding: 9, border: "1px solid #ddc9b7", borderRadius: 8, background: "#fffdfb" }} /></label>
+          <label style={{ display: "grid", gap: 5, color: "#806b5e", fontSize: 11 }}>Signed minutes / resolution reference<input value={assignmentMinutesReference} onChange={(event) => setAssignmentMinutesReference(event.target.value)} maxLength={255} placeholder="Optional meeting reference" style={{ padding: 9, border: "1px solid #ddc9b7", borderRadius: 8, background: "#fffdfb" }} /></label>
+        </div>
+        </details>
+        {roleUsers.length ? <div style={{ display: "grid", gap: 8 }}>{roleUsers.map((user) => <div key={user.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: 11, border: "1px solid #efe2d8", borderRadius: 9 }}><div><strong style={{ color: "#503326", fontSize: 13 }}>{user.full_name}</strong><div style={{ color: "#806b5e", fontSize: 11 }}>{user.membership_number || user.email || `Member #${user.id}`} · Current role: {user.role}</div></div><div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}><select aria-label={`Assign role to ${user.full_name}`} value="" onChange={(event) => assignRole(user.id, event.target.value)} style={{ minWidth: 220, padding: 9, border: "1px solid #ddc9b7", borderRadius: 8, background: "#fffdfb", color: "#503326" }}><option value="" disabled>Assign committee role…</option>{roles.filter((role) => role.is_active && role.name.toUpperCase() !== "ADMIN").map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select>{user.role_id && user.role.toUpperCase() !== "CITIZEN" && user.role.toUpperCase() !== "ADMIN" && <button type="button" className="btn btn-outline" onClick={() => revokeRole(user)}>End role</button>}</div></div>)}</div> : <p style={{ color: "#806b5e", fontSize: 12 }}>No approved active members are available for role assignment.</p>}
+
+        <details style={{ marginTop: 16, padding: 10, border: "1px solid #f0e2d8", borderRadius: 9 }}>
+        <summary style={{ color: "#624b3d", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Committee term and handover history</summary>
+        {roleAssignments.length ? <div style={{ display: "grid", gap: 7 }}>{roleAssignments.map((assignment) => <div key={assignment.id} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 8, padding: 10, border: "1px solid #efe2d8", borderRadius: 8, color: "#624b3d", fontSize: 11 }}><strong>{assignment.member_name} · {assignment.role}</strong><span>{assignment.status}</span><span>{assignment.term_start || "Start not set"} → {assignment.term_end || "End not set"}</span><span>{assignment.minutes_reference || "No minutes reference"}</span><span>{assignment.end_reason || `Assigned ${new Date(assignment.assigned_at).toLocaleString()}`}</span></div>)}</div> : <p style={{ color: "#806b5e", fontSize: 12 }}>New assignments and handovers will be recorded here.</p>}
+        </details>
+      </section>}
+
+      {["ADMIN", "SUPER ADMIN"].includes(String(activeUser?.role || "").toUpperCase()) && <details style={{ marginBottom: 20, padding: 14, border: "1px solid #ead8cc", borderRadius: 14, background: "#fffdfb" }}>
+        <summary style={{ color: "#503326", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>Activity history</summary>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <div><h2 style={{ margin: "0 0 5px", color: "#503326", fontSize: 19 }}>Activity history</h2><p style={{ margin: 0, color: "#806b5e", fontSize: 12 }}>Administrative changes with timestamp, account, result, and connecting IP address.</p></div>
+          <button type="button" className="btn btn-outline" onClick={loadActivityLogs}>Refresh</button>
+        </div>
+        {activityError && <p role="alert" style={{ color: "#a13d2d", fontSize: 12 }}>{activityError}</p>}
+        {activityLogs.length ? <div style={{ display: "grid", gap: 7, marginTop: 14 }}>{activityLogs.map((entry) => <div key={entry.id} style={{ display: "grid", gridTemplateColumns: "minmax(150px, 1.2fr) minmax(130px, 1fr) minmax(150px, 1.3fr) minmax(100px, .7fr)", gap: 10, padding: 10, border: "1px solid #efe2d8", borderRadius: 8, color: "#624b3d", fontSize: 11, overflowWrap: "anywhere" }}><span>{new Date(entry.created_at).toLocaleString()}</span><strong>{entry.actor_name}</strong><span>{entry.action} {entry.resource} · {entry.status_code}</span><span>IP: {entry.ip_address || "Unavailable"}</span></div>)}</div> : !activityError && <p style={{ color: "#806b5e", fontSize: 12, marginTop: 14 }}>No recorded activity yet.</p>}
+      </details>}
+
+      {!committeeOnly && <div className="settings-card">
         {[
           [
             "Account Security",
@@ -4508,7 +5848,7 @@ function SettingsPage() {
             </label>
           </div>
         ))}
-      </div>
+      </div>}
     </PageWrapper>
   );
 }
@@ -4546,43 +5886,44 @@ function AuthModal({
   const [forgotNewPassword, setForgotNewPassword] = useState("");
   const [forgotConfirmPassword, setForgotConfirmPassword] = useState("");
 
-  const enterDemoWebsite = () => {
-    // Temporary frontend-only demo access while the authentication backend is being built.
-    // This does not verify identity and must not be used for production authentication.
-    try {
-      sessionStorage.setItem("potterCommunityDemoMode", "true");
-      sessionStorage.removeItem("potterCommunityAccessToken");
-    } catch {}
-    onAuthenticated("General Member", {
-      id: "demo-member",
-      fullName: "Demo Member",
-      email: "demo@pottercommunity.local",
-      phone: "",
-      role: "General Member",
-      membershipStatus: "DEMO",
-    });
-  };
-
   const sendPasswordResetOtp = async () => {
     setAuthError("");
     setAuthNotice("");
-    const phoneValue = forgotPhone.trim();
-    if (!/^(?:\\+91)?[6-9]\\d{9}$/.test(phoneValue.replace(/[\\s()-]/g, ""))) {
+
+    const phoneValue = forgotPhone.replace(/\D/g, "");
+
+    if (!/^[6-9]\d{9}$/.test(phoneValue)) {
       setAuthError("Enter a valid 10-digit Indian mobile number.");
       return;
     }
+
     setAuthBusy(true);
+
     try {
-      const result = await authApi("/api/auth/password/forgot", {
+      const result = await authApi("/auth/forgot-password", {
         method: "POST",
-        body: JSON.stringify({ phone: phoneValue.replace(/[\\s()-]/g, "") }),
+        body: JSON.stringify({
+          phone_number: phoneValue,
+        }),
       });
-      if (!result.challengeId) throw new Error("The server did not return a password-reset challenge.");
-      setForgotChallengeId(result.challengeId);
+
+      setForgotPhone(phoneValue);
       setForgotOtpSent(true);
-      setAuthNotice(result.message || "If the account exists, a password-reset OTP has been sent.");
+      setForgotOtp("");
+      setForgotChallengeId("");
+
+      if (result.debug_otp) {
+        setAuthNotice(`Development OTP: ${result.debug_otp}`);
+      } else {
+        setAuthNotice(
+          result.message ||
+            "If the account is eligible, password reset instructions will be sent."
+        );
+      }
     } catch (error) {
-      setAuthError(error.message || "Unable to send reset OTP. Please try again.");
+      setAuthError(
+        error.message || "Unable to send reset OTP. Please try again."
+      );
     } finally {
       setAuthBusy(false);
     }
@@ -4590,40 +5931,76 @@ function AuthModal({
 
   const resetPasswordWithOtp = async (e) => {
     e.preventDefault();
+
     setAuthError("");
     setAuthNotice("");
-    if (!/^\\d{4,8}$/.test(forgotOtp.trim())) {
-      setAuthError("Enter the OTP you received.");
+
+    const phoneValue = forgotPhone.replace(/\D/g, "");
+    const otpValue = forgotOtp.trim();
+
+    if (!/^[6-9]\d{9}$/.test(phoneValue)) {
+      setAuthError("Enter a valid 10-digit Indian mobile number.");
       return;
     }
+
+    if (!/^\d{6}$/.test(otpValue)) {
+      setAuthError("Enter the 6-digit OTP.");
+      return;
+    }
+
     if (forgotNewPassword.length < 8) {
       setAuthError("Your new password must contain at least 8 characters.");
       return;
     }
+
     if (forgotNewPassword !== forgotConfirmPassword) {
       setAuthError("The new passwords do not match.");
       return;
     }
+
     setAuthBusy(true);
+
     try {
-      const result = await authApi("/api/auth/password/reset", {
+      const otpResult = await authApi("/auth/verify-reset-otp", {
         method: "POST",
         body: JSON.stringify({
-          challengeId: forgotChallengeId,
-          otp: forgotOtp.trim(),
-          newPassword: forgotNewPassword,
+          phone_number: phoneValue,
+          otp: otpValue,
         }),
       });
-      setAuthNotice(result.message || "Password reset successfully. You can now sign in.");
+
+      if (!otpResult.reset_token) {
+        throw new Error(
+          "The server did not return a password reset token."
+        );
+      }
+
+      const resetResult = await authApi("/auth/reset-password", {
+        method: "POST",
+        body: JSON.stringify({
+          reset_token: otpResult.reset_token,
+          new_password: forgotNewPassword,
+          confirm_password: forgotConfirmPassword,
+        }),
+      });
+
+      setAuthNotice(
+        resetResult.message ||
+          "Password reset successfully. You can now sign in."
+      );
+
       setForgotPassword(false);
       setForgotOtpSent(false);
-      setForgotChallengeId("");
+      setForgotPhone("");
       setForgotOtp("");
+      setForgotChallengeId("");
       setForgotNewPassword("");
       setForgotConfirmPassword("");
       setMode("signin");
     } catch (error) {
-      setAuthError(error.message || "Unable to reset password. Please try again.");
+      setAuthError(
+        error.message || "Unable to reset password. Please try again."
+      );
     } finally {
       setAuthBusy(false);
     }
@@ -4672,14 +6049,25 @@ function AuthModal({
     }
     setAuthBusy(true);
     try {
-      const result = await authApi("/api/auth/otp/send", {
-        method: "POST", body: JSON.stringify({ phone: normalizedPhone, purpose: "signup" }),
+      const result = await authApi("/auth/request-otp", {
+        method: "POST", body: JSON.stringify({ phone_number: normalizedPhone }),
       });
+      if (result.phone_verified) {
+        setSignupOtpSent(false);
+        setAuthError("This phone number already has an account. Sign in instead.");
+        setMode("signin");
+        return;
+      }
       setSignupOtpSent(true);
       setSignupOtpVerified(false);
       setPhoneVerificationToken("");
       setOtp("");
-      setAuthNotice(result.message || "OTP sent. Check your phone and enter the code below.");
+
+      if (result.debug_otp) {
+        setAuthNotice(`Development OTP: ${result.debug_otp}`);
+      } else {
+        setAuthNotice(result.message || "OTP sent. Check your phone and enter the code below.");
+      }
     } catch (error) {
       setAuthError(error.message || "Could not send OTP. Check your connection and try again.");
     } finally { setAuthBusy(false); }
@@ -4691,10 +6079,16 @@ function AuthModal({
     if (!/^\d{4,8}$/.test(otp.trim())) { setAuthError("Enter the OTP you received."); return; }
     setAuthBusy(true);
     try {
-      const result = await authApi("/api/auth/otp/verify", {
-        method: "POST", body: JSON.stringify({ phone: phone.replace(/\D/g, ""), otp: otp.trim(), purpose: "signup" }),
+      const result = await authApi("/auth/verify-otp", {
+        method: "POST", body: JSON.stringify({ phone_number: phone.replace(/\D/g, ""), otp: otp.trim() }),
       });
-      if (!result.verified || !result.verificationToken) throw new Error("The server did not confirm OTP verification. Please try again.");
+      if (!result.verified || !result.verificationToken) {
+        if (result.phone_verified) {
+          setMode("signin");
+          throw new Error("This phone number belongs to an existing account. Sign in instead.");
+        }
+        throw new Error("The server did not confirm OTP verification. Please try again.");
+      }
       setSignupOtpVerified(true);
       setPhoneVerificationToken(result.verificationToken);
       setAuthNotice("Phone number verified successfully.");
@@ -4716,27 +6110,6 @@ function AuthModal({
     if (!password) { setAuthError("Password is required every time you sign in."); return; }
     setAuthBusy(true);
     try {
-      // TEMPORARY DEMO MODE: while backend auth is under development, any non-empty
-      // email/phone and password can enter as a General Member without API/OTP calls.
-      // Remove this branch before public deployment.
-      if (mode === "signin") {
-        const identifier = String(formData.get("identifier") || "").trim();
-        if (!identifier) throw new Error("Enter any email address or phone number to continue.");
-        try {
-          sessionStorage.setItem("potterCommunityDemoMode", "true");
-          sessionStorage.removeItem("potterCommunityAccessToken");
-        } catch {}
-        const demoUser = {
-          id: "demo-member",
-          fullName: "Demo Member",
-          email: identifier.includes("@") ? identifier : "demo@pottercommunity.local",
-          phone: identifier.includes("@") ? "" : identifier.replace(/\\D/g, ""),
-          role: "General Member",
-          membershipStatus: "DEMO",
-        };
-        onAuthenticated("General Member", demoUser);
-        return;
-      }
       if (mode === "signup") {
         const confirmPassword = String(formData.get("confirmPassword") || "");
         const dobValue = String(formData.get("dateOfBirth") || "");
@@ -4750,34 +6123,89 @@ function AuthModal({
         if (!certificateFile) { setCertificateError("Please upload your caste/community certificate to continue."); throw new Error("Please upload your caste/community certificate to continue."); }
         if (!signupOtpVerified || !phoneVerificationToken) throw new Error("Verify your phone number with OTP before submitting the membership request.");
 
+        formData.set("full_name", String(formData.get("fullName") || "").trim());
         formData.set("phone", phone.replace(/\D/g, ""));
         formData.set("phoneVerificationToken", phoneVerificationToken);
-        formData.delete("confirmPassword");
         if (certificateFile) formData.set("certificate", certificateFile);
-        const result = await authApi("/api/auth/signup", { method: "POST", body: formData });
+        const result = await authApi("/auth/register", { method: "POST", body: formData });
         setAuthNotice(result.message || "Your account request was submitted successfully.");
         onRegistered();
-      } else if (!loginOtpStep) {
-        const identifier = String(formData.get("identifier") || "").trim();
-        if (!identifier) throw new Error("Enter your email address or phone number.");
-        const result = await authApi("/api/auth/login", {
-          method: "POST", body: JSON.stringify({ identifier, password }),
-        });
-        if (!result.challengeId) throw new Error("The server did not create an OTP challenge. Please check the authentication backend setup.");
-        setLoginChallengeId(result.challengeId);
-        setLoginOtpStep(true);
-        setOtp("");
-        setAuthNotice(result.message || "Password accepted. An OTP has been sent to the phone number linked to your account.");
       } else {
-        if (!/^\d{4,8}$/.test(otp.trim())) throw new Error("Enter the OTP you received.");
-        const result = await authApi("/api/auth/login/verify", {
-          method: "POST", body: JSON.stringify({ challengeId: loginChallengeId, otp: otp.trim() }),
+        const identifier = String(formData.get("identifier") || "").trim();
+
+        if (!identifier) {
+          throw new Error("Enter your email address or phone number.");
+        }
+
+        const result = await authApi("/auth/login", {
+          method: "POST",
+          body: JSON.stringify({
+            identifier,
+            password,
+          }),
         });
-        if (!result.token || !result.user) throw new Error("The server did not return a valid authenticated session.");
-        // Keep the session for this browser tab only; backend must validate it on protected API calls.
-        sessionStorage.setItem("potterCommunityAccessToken", result.token);
-        const serverRole = result.user.role || result.role || "General Member";
-        onAuthenticated(serverRole, result.user);
+
+        if (!result.access_token) {
+          throw new Error("The server did not return an access token.");
+        }
+
+        // Store the backend JWT for authenticated API requests.
+        sessionStorage.setItem(
+          "potterCommunityAccessToken",
+          result.access_token
+        );
+
+        // Also keep localStorage compatible with the existing API client.
+        localStorage.setItem("token", result.access_token);
+
+        let user;
+        try {
+          user = await authApi("/auth/me", { method: "GET" });
+        } catch (error) {
+          sessionStorage.removeItem("potterCommunityAccessToken");
+          localStorage.removeItem("token");
+          throw new Error(error.message || "Signed in, but your account profile could not be loaded. Please try again.");
+        }
+
+        const serverRole =
+          user?.role ||
+          result.role ||
+          "General Member";
+
+        if (user) {
+          try {
+            sessionStorage.setItem(
+              "potterCommunityUser",
+              JSON.stringify(user)
+            );
+
+            const existingProfile = JSON.parse(
+              localStorage.getItem("potterProfile") || "{}"
+            );
+
+            const syncedProfile = {
+              ...existingProfile,
+              fullName: user.full_name || existingProfile.fullName || "",
+              email: user.email || existingProfile.email || "",
+              phone: user.phone_number || existingProfile.phone || "",
+              membershipStatus:
+                user.membership_status ||
+                existingProfile.membershipStatus ||
+                "PENDING",
+              membershipId:
+                user.membership_number ||
+                existingProfile.membershipId ||
+                "",
+            };
+
+            localStorage.setItem(
+              "potterProfile",
+              JSON.stringify(syncedProfile)
+            );
+          } catch {}
+        }
+
+        onAuthenticated(serverRole, user);
       }
     } catch (error) {
       setAuthError(error.message || "Unable to complete this request. Please try again.");

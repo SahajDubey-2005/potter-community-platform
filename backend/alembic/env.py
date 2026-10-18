@@ -11,8 +11,15 @@ load_dotenv()
 from app.database import Base
 from app.models import User
 
+
 config = context.config
-config.set_main_option("sqlalchemy.url", os.getenv("DATABASE_URL"))
+
+database_url = os.getenv("DATABASE_URL")
+
+if not database_url:
+    raise RuntimeError("DATABASE_URL is not set")
+
+config.set_main_option("sqlalchemy.url", database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -31,15 +38,23 @@ def run_migrations_offline():
         context.run_migrations()
 
 def run_migrations_online():
+    section = config.get_section(config.config_ini_section)
+
+    if section is None:
+        raise RuntimeError("Alembic configuration section is missing")
+
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section),
+        section,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
+
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection,
+            target_metadata=target_metadata
         )
+
         with context.begin_transaction():
             context.run_migrations()
 
