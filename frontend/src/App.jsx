@@ -690,20 +690,22 @@ function App() {
 
   const openMembershipDocument = async (membershipDocument) => {
     const token = sessionStorage.getItem("potterCommunityAccessToken") || localStorage.getItem("token");
+    const previewWindow = window.open("about:blank", "_blank");
+    if (!previewWindow) {
+      alert("Allow pop-ups for this site to view the document in a new tab.");
+      return;
+    }
     try {
       const response = await fetch(`${AUTH_API_BASE}${membershipDocument.download_url}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!response.ok) throw new Error("The document could not be opened.");
       const blobUrl = URL.createObjectURL(await response.blob());
-      const link = window.document.createElement("a");
-      link.href = blobUrl;
-      link.download = `${membershipDocument.document_type || "member-document"}`;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      link.click();
-      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+      previewWindow.opener = null;
+      previewWindow.location.href = blobUrl;
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 5 * 60_000);
     } catch (error) {
+      previewWindow.close();
       alert(error.message || "The document could not be opened.");
     }
   };
@@ -914,7 +916,8 @@ function App() {
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 22 }}><h3 style={{ margin: 0 }}>Submitted documents</h3><button type="button" className="btn btn-outline" onClick={() => viewMembershipApplication(reviewingMembership.id)} disabled={reviewDetailsLoading}>Refresh application</button></div>
             <p style={{ color: "#806b5e", fontSize: 12 }}>Review stage: {membershipReviewStage.replaceAll("_", " ")}</p>
-            {reviewingMembership.documents?.length ? <div style={{ display: "grid", gap: 8, marginTop: 10 }}>{reviewingMembership.documents.map((document) => <div key={document.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", border: "1px solid #ead8cc", borderRadius: 10, padding: 12 }}><div><strong>{document.document_type}</strong><div style={{ color: "#806b5e", fontSize: 12 }}>Status: {document.status} · Submitted {document.created_at ? new Date(document.created_at).toLocaleString() : "date unavailable"}</div></div><div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{canReviewDocuments && <button type="button" className="btn btn-outline" onClick={() => openMembershipDocument(document)}>View / download</button>}{canReviewDocuments && document.status === "PENDING" && <><button type="button" className="btn btn-primary" onClick={() => reviewApplicationDocument(document.id, "APPROVED")} disabled={documentReviewBusy !== null}>{documentReviewBusy === document.id ? "Saving…" : "Approve document"}</button><button type="button" className="btn btn-outline" onClick={() => reviewApplicationDocument(document.id, "REJECTED")} disabled={documentReviewBusy !== null}>Reject</button></>}</div></div>)}</div> : <div style={{ marginTop: 10, padding: 12, border: "1px solid #f0d8c9", borderRadius: 10, background: "#fff8f2" }}><p style={{ margin: "0 0 10px", color: "#806b5e" }}>No uploaded document records are attached to this application in the server. Ask the member to resubmit their files; then refresh this application.</p>{(isPlatformAdmin || activeUser?.permissions?.includes("membership.review")) && <button type="button" className="btn btn-outline" onClick={requestMembershipDocuments} disabled={documentRequestBusy}>{documentRequestBusy ? "Sending request…" : "Ask member to resubmit documents"}</button>}{documentRequestStatus && <p role="status" style={{ margin: "9px 0 0", color: "#39734a", fontSize: 12 }}>{documentRequestStatus}</p>}</div>}
+            {reviewingMembership.documents?.length ? <div style={{ display: "grid", gap: 8, marginTop: 10 }}>{reviewingMembership.documents.map((document) => <div key={document.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", border: "1px solid #ead8cc", borderRadius: 10, padding: 12 }}><div><strong>{document.document_type}</strong><div style={{ color: "#806b5e", fontSize: 12 }}>Status: {document.status} · Submitted {document.created_at ? new Date(document.created_at).toLocaleString() : "date unavailable"}</div></div><div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{canReviewDocuments && <button type="button" className="btn btn-outline" onClick={() => openMembershipDocument(document)}>View document</button>}{canReviewDocuments && document.status === "PENDING" && <><button type="button" className="btn btn-primary" onClick={() => reviewApplicationDocument(document.id, "APPROVED")} disabled={documentReviewBusy !== null}>{documentReviewBusy === document.id ? "Saving…" : "Approve document"}</button><button type="button" className="btn btn-outline" onClick={() => reviewApplicationDocument(document.id, "REJECTED")} disabled={documentReviewBusy !== null}>Reject</button></>}</div></div>)}</div> : <div style={{ marginTop: 10, padding: 12, border: "1px solid #f0d8c9", borderRadius: 10, background: "#fff8f2" }}><p style={{ margin: "0 0 10px", color: "#806b5e" }}>No uploaded document records are attached to this application in the server. Ask the member to resubmit their files; then refresh this application.</p>{(isPlatformAdmin || activeUser?.permissions?.includes("membership.review")) && <button type="button" className="btn btn-outline" onClick={requestMembershipDocuments} disabled={documentRequestBusy}>{documentRequestBusy ? "Sending request…" : "Ask member to resubmit documents"}</button>}{documentRequestStatus && <p role="status" style={{ margin: "9px 0 0", color: "#39734a", fontSize: 12 }}>{documentRequestStatus}</p>}</div>}
+              {canForwardToVerification && !allMembershipDocumentsApproved && <p style={{ margin: "10px 0 0", color: "#806b5e", fontSize: 12 }}>Approve every uploaded document above before forwarding this application.</p>}
               {documentRequestStatus && reviewingMembership.documents?.length > 0 && <p role="status" style={{ margin: "9px 0 0", color: "#39734a", fontSize: 12 }}>{documentRequestStatus}</p>}
               <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap", marginTop: 22, paddingTop: 16, borderTop: "1px solid #ead8cc" }}>
                 {canRejectMembership && <button type="button" className="btn btn-outline" onClick={() => handleMembershipAction(reviewingMembership.id, "reject")} disabled={membershipActionLoading !== null}>{membershipActionLoading === `reject-${reviewingMembership.id}` ? "Rejecting…" : "Reject application"}</button>}
@@ -5632,7 +5635,10 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
   const [assignmentTermStart, setAssignmentTermStart] = useState("");
   const [assignmentTermEnd, setAssignmentTermEnd] = useState("");
   const [assignmentMinutesReference, setAssignmentMinutesReference] = useState("");
+  const [adminDraft, setAdminDraft] = useState({ full_name: "", email: "", phone_number: "", password: "" });
+  const [adminBusy, setAdminBusy] = useState(false);
   const canManageRoles = String(activeUser?.role || "").toUpperCase() === "ADMIN" || activeUser?.permissions?.includes("roles.manage");
+  const canCreateAdmins = ["ADMIN", "SUPER ADMIN"].includes(String(activeUser?.role || "").toUpperCase());
   const permissionOptions = [
     ["membership.view", "View member status"],
     ["membership.review", "Review membership applications"],
@@ -5748,6 +5754,29 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
     }
   };
 
+  const createAdminAccount = async (event) => {
+    event.preventDefault();
+    setRoleError("");
+    setRoleNotice("");
+    setAdminBusy(true);
+    try {
+      const result = await authApi("/admin/roles/admins", {
+        method: "POST",
+        body: JSON.stringify({
+          ...adminDraft,
+          email: adminDraft.email.trim().toLowerCase(),
+          phone_number: adminDraft.phone_number.trim() || null,
+        }),
+      });
+      setAdminDraft({ full_name: "", email: "", phone_number: "", password: "" });
+      setRoleNotice(`Admin account created for ${result.full_name} (${result.email}). They can now sign in.`);
+    } catch (error) {
+      setRoleError(error.message || "Could not create the Admin account.");
+    } finally {
+      setAdminBusy(false);
+    }
+  };
+
   return (
     <PageWrapper>
       <PageHeader
@@ -5779,6 +5808,20 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
 
         {roleError && <p role="alert" style={{ color: "#a13d2d", fontSize: 12 }}>{roleError}</p>}
         {roleNotice && <p role="status" style={{ color: "#39734a", fontSize: 12 }}>{roleNotice}</p>}
+
+        {canCreateAdmins && <details style={{ marginTop: 14, padding: 12, border: "1px solid #f0e2d8", borderRadius: 11 }}>
+          <summary style={{ color: "#624b3d", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Create a platform Admin account</summary>
+          <form onSubmit={createAdminAccount} style={{ display: "grid", gap: 10, marginTop: 12 }}>
+            <p style={{ margin: 0, color: "#806b5e", fontSize: 12 }}>Admin access is created here by an existing Admin. Public sign-up remains for member applications only. Sign in with the email or phone number provided.</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 9 }}>
+              <input aria-label="New Admin full name" required minLength={2} maxLength={160} value={adminDraft.full_name} onChange={(event) => setAdminDraft({ ...adminDraft, full_name: event.target.value })} placeholder="Full name" style={{ padding: 10, border: "1px solid #ddc9b7", borderRadius: 8 }} />
+              <input aria-label="New Admin email" type="email" value={adminDraft.email} onChange={(event) => setAdminDraft({ ...adminDraft, email: event.target.value })} placeholder="Email address (optional)" style={{ padding: 10, border: "1px solid #ddc9b7", borderRadius: 8 }} />
+              <input aria-label="New Admin phone number" type="tel" minLength={10} maxLength={20} value={adminDraft.phone_number} onChange={(event) => setAdminDraft({ ...adminDraft, phone_number: event.target.value })} placeholder="Phone number (email or phone required)" style={{ padding: 10, border: "1px solid #ddc9b7", borderRadius: 8 }} />
+              <input aria-label="New Admin password" type="password" required minLength={10} maxLength={128} value={adminDraft.password} onChange={(event) => setAdminDraft({ ...adminDraft, password: event.target.value })} placeholder="Password (10+ characters)" style={{ padding: 10, border: "1px solid #ddc9b7", borderRadius: 8 }} />
+            </div>
+            <div><button type="submit" className="btn btn-primary" disabled={adminBusy}>{adminBusy ? "Creating…" : "Create Admin account"}</button></div>
+          </form>
+        </details>}
 
         <div style={{ display: "grid", gap: 9, marginTop: 14 }}>
           {roles.map((role) => <div key={role.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: 12, border: "1px solid #efe2d8", borderRadius: 9 }}><div><strong style={{ color: "#503326" }}>{role.name}</strong><div style={{ color: "#806b5e", fontSize: 11, marginTop: 3 }}>{role.description || "No description"} · {role.users_count} assigned · {role.is_active ? "Active" : "Inactive"}</div><div style={{ color: "#806b5e", fontSize: 11, marginTop: 3 }}>Permissions: {(role.permissions || []).length ? role.permissions.join(", ") : "None"}</div></div><button type="button" className="btn btn-outline" onClick={() => editRole(role)}>Edit</button></div>)}
@@ -6333,6 +6376,8 @@ function AuthModal({
                   <input aria-label="Signup OTP" inputMode="numeric" autoComplete="one-time-code" value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 8))} placeholder="Enter OTP" maxLength={8} style={{ flex: 1, minWidth: 0 }} />
                   <button type="button" onClick={verifySignupOtp} disabled={authBusy} style={{ border: "1px solid #c47c5a", borderRadius: 8, padding: "0 12px", background: "#a9502f", color: "#fff", fontSize: 11, fontWeight: 750, cursor: authBusy ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}>{authBusy ? "Checking…" : "Verify OTP"}</button>
                 </div>}
+                {signupOtpSent && authNotice && <div role="status" style={{ marginTop: 8, padding: "9px 11px", border: "1px solid #c7e4cd", borderRadius: 8, background: "#f0faf2", color: "#216b35", fontSize: 12, lineHeight: 1.5 }}>{authNotice}</div>}
+                {mode === "signup" && authError && <div role="alert" style={{ marginTop: 8, padding: "9px 11px", border: "1px solid #f0b8b2", borderRadius: 8, background: "#fff2f0", color: "#a1261c", fontSize: 12, lineHeight: 1.5 }}>{authError}</div>}
               </div>
             </>
           ) : (
@@ -6572,8 +6617,8 @@ function AuthModal({
             </>
           )}
 
-          {authError && <div role="alert" style={{ margin: "10px 0", padding: "10px 12px", borderRadius: 8, border: "1px solid #f0b8b2", background: "#fff2f0", color: "#a1261c", fontSize: 12, lineHeight: 1.5 }}>{authError}</div>}
-          {authNotice && <div role="status" style={{ margin: "10px 0", padding: "10px 12px", borderRadius: 8, border: "1px solid #c7e4cd", background: "#f0faf2", color: "#216b35", fontSize: 12, lineHeight: 1.5 }}>{authNotice}</div>}
+          {mode !== "signup" && authError && <div role="alert" style={{ margin: "10px 0", padding: "10px 12px", borderRadius: 8, border: "1px solid #f0b8b2", background: "#fff2f0", color: "#a1261c", fontSize: 12, lineHeight: 1.5 }}>{authError}</div>}
+          {authNotice && !(mode === "signup" && signupOtpSent) && <div role="status" style={{ margin: "10px 0", padding: "10px 12px", borderRadius: 8, border: "1px solid #c7e4cd", background: "#f0faf2", color: "#216b35", fontSize: 12, lineHeight: 1.5 }}>{authNotice}</div>}
           <button type="submit" className="auth-submit" disabled={authBusy || (mode === "signup" && !signupOtpVerified)} style={{ opacity: authBusy || (mode === "signup" && !signupOtpVerified) ? 0.65 : 1, cursor: authBusy || (mode === "signup" && !signupOtpVerified) ? "not-allowed" : "pointer" }}>
             {authBusy ? "Please wait…" : mode === "signin" ? (loginOtpStep ? "Verify OTP & Sign In" : "Continue with Password") : "Submit Membership Request"}
             {!authBusy && <ArrowRight size={17} />}

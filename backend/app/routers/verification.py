@@ -73,7 +73,11 @@ def download_verification_document(
     path = private_document_path(verification.document_url)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Document file is unavailable")
-    return FileResponse(path, filename=f"{verification.document_type}{path.suffix}")
+    return FileResponse(
+        path,
+        filename=f"{verification.document_type}{path.suffix}",
+        content_disposition_type="inline",
+    )
 
 
 @router.post("/", response_model=VerificationResponse)

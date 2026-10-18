@@ -1,16 +1,5 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+"""Uvicorn entry point kept for the documented `uvicorn main:app` command."""
 
-app = FastAPI()
+from app.main import app
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-@app.get("/")
-def read_root():
-    return {"message": "Potter Platform Backend Running!"}
+__all__ = ["app"]
