@@ -5,6 +5,7 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException, status, Form, File, UploadFile
 from pydantic import BaseModel, EmailStr, Field, TypeAdapter, ValidationError
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -959,9 +960,18 @@ def forward_membership_to_verification(
     documents = db.query(Verification).filter(Verification.user_id == user.id).all()
     if not documents or any(document.status != "APPROVED" for document in documents):
         raise HTTPException(status_code=409, detail="Review and approve all uploaded documents before forwarding this application")
+    verifiers = db.query(User).join(Role, User.role_id == Role.id).filter(
+        User.is_active.is_(True),
+        Role.is_active.is_(True),
+        func.lower(func.trim(Role.name)) == "verification officer",
+    ).all()
+    if not verifiers:
+        raise HTTPException(
+            status_code=409,
+            detail="No active Verification Officer is assigned. Assign this role to an approved member in Committee & Roles, then try again.",
+        )
     details["review_stage"] = "VERIFICATION_OFFICER_REVIEW"
     user.application_details = details
-    verifiers = db.query(User).join(Role, User.role_id == Role.id).filter(User.is_active.is_(True), Role.name == "Verification Officer").all()
     for verifier in verifiers:
         create_notification(db, verifier.id, "Membership application for verification", f"{user.full_name}'s membership application is ready for verification review.", "verification")
     db.commit()

@@ -1,11 +1,12 @@
 from datetime import date, datetime, timezone
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_user, require_permission
+from app.auth import get_current_user, get_password_hash, require_permission
 from app.database import get_db
 from app.models import CommitteeAssignment, Role, User
 
@@ -50,6 +51,13 @@ class RoleRevocation(BaseModel):
     reason: str = Field(min_length=3, max_length=500)
 
 
+class AdminAccountCreate(BaseModel):
+    full_name: str = Field(min_length=2, max_length=160)
+    email: EmailStr | None = None
+    phone_number: str | None = Field(default=None, min_length=10, max_length=20)
+    password: str = Field(min_length=10, max_length=128)
+
+
 def validate_permissions(permissions: list[str]) -> list[str]:
     unknown = sorted(set(permissions) - AVAILABLE_PERMISSIONS)
     if unknown:
@@ -70,6 +78,55 @@ def serialize_role(role: Role, users_count: int = 0) -> dict:
         "users_count": users_count,
         "created_at": role.created_at.isoformat(),
     }
+
+
+def require_platform_admin(current_user: User) -> None:
+    legacy_role = (current_user.role or "").strip().upper()
+    dynamic_role = (current_user.role_record.name or "").strip().upper() if current_user.role_record else ""
+    if not {"ADMIN", "SUPER ADMIN"}.intersection({legacy_role, dynamic_role}):
+        raise HTTPException(status_code=403, detail="Only a platform Admin can create Admin accounts")
+
+
+@router.post("/admins", status_code=status.HTTP_201_CREATED)
+def create_admin_account(
+    data: AdminAccountCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Create an active platform admin. Public member signup cannot grant admin access."""
+    require_platform_admin(current_user)
+    email = str(data.email).strip().lower() if data.email else None
+    if not email and not data.phone_number:
+        raise HTTPException(status_code=422, detail="Provide an email address or phone number for sign-in")
+    if email and db.query(User).filter(func.lower(User.email) == email).first():
+        raise HTTPException(status_code=409, detail="An account with this email already exists")
+    phone = re.sub(r"\D", "", data.phone_number) if data.phone_number else None
+    if phone and len(phone) == 12 and phone.startswith("91"):
+        phone = phone[2:]
+    elif phone and len(phone) == 11 and phone.startswith("0"):
+        phone = phone[1:]
+    if phone and not re.fullmatch(r"[6-9]\d{9}", phone):
+        raise HTTPException(status_code=422, detail="Enter a valid 10-digit Indian mobile number")
+    if phone and db.query(User).filter(User.phone_number == phone).first():
+        raise HTTPException(status_code=409, detail="An account with this phone number already exists")
+    admin_role = db.query(Role).filter(func.upper(Role.name) == "ADMIN").first()
+    if admin_role is None:
+        admin_role = Role(name="ADMIN", description="Platform administrator", permissions=[], is_active=True,
+                          created_at=datetime.now(timezone.utc))
+        db.add(admin_role)
+        db.flush()
+    if not admin_role.is_active:
+        raise HTTPException(status_code=409, detail="The platform Admin role is inactive")
+    user = User(
+        full_name=data.full_name.strip(), email=email, phone_number=phone,
+        hashed_password=get_password_hash(data.password), role="ADMIN", role_id=admin_role.id,
+        is_active=True, phone_verified=bool(phone), membership_status="APPROVED",
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return {"id": user.id, "full_name": user.full_name, "email": user.email,
+            "phone_number": user.phone_number, "role": "ADMIN", "is_active": user.is_active}
 
 
 @router.get("")
