@@ -60,6 +60,7 @@ def save_otp(
     db: Session,
     phone_number: str,
     otp: str,
+    purpose: str = "phone_verification"
 ) -> PhoneOTP:
     """Invalidate old OTPs and securely store a new OTP."""
 
@@ -67,6 +68,7 @@ def save_otp(
         # Invalidate previously unused OTPs for this phone.
         db.query(PhoneOTP).filter(
             PhoneOTP.phone_number == phone_number,
+            PhoneOTP.purpose == purpose,
             PhoneOTP.is_used.is_(False),
         ).update(
             {"is_used": True},
@@ -76,6 +78,7 @@ def save_otp(
         # Create the new OTP record.
         otp_record = PhoneOTP(
             phone_number=phone_number,
+            purpose=purpose,
             otp_hash=hash_otp(otp),
             expires_at=get_otp_expiry(),
             attempts=0,
@@ -96,7 +99,8 @@ def save_otp(
 def verify_otp(
     db: Session,
     phone_number: str,
-    otp: str
+    otp: str,
+    purpose: str = "phone_verification",
 ) -> bool:
     """Verify an OTP with expiry and attempt limits."""
 
@@ -104,8 +108,9 @@ def verify_otp(
         db.query(PhoneOTP)
         .filter(
             PhoneOTP.phone_number == phone_number,
-            PhoneOTP.is_used.is_(False)
-        )
+            PhoneOTP.purpose == purpose,
+            PhoneOTP.is_used.is_(False),
+    )
         .order_by(PhoneOTP.created_at.desc(), PhoneOTP.id.desc())
         .first()
     )

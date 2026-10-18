@@ -16,5 +16,8 @@ __pycache__/
 *.sqlite
 *.sqlite3
 
+# Private membership application documents
+backend/private_uploads/
+
 # OS files
 .DS_Store

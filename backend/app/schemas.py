@@ -1,6 +1,11 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import (
+    BaseModel,
+    EmailStr,
+    Field,
+    model_validator,
+)
 
-from app.models import UserRole
+
 
 
 # -------------------------
@@ -19,8 +24,11 @@ class UserResponse(BaseModel):
     full_name: str
     phone_number: str
     email: EmailStr | None = None
-    role: UserRole
+    role: str
     is_active: bool
+    membership_status: str = "PENDING"
+    membership_number: str | None = None
+    permissions: list[str] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
@@ -87,3 +95,27 @@ class OTPVerify(BaseModel):
         max_length=6,
         pattern=r"^\d{6}$"
     )
+
+
+
+class PasswordResetOTPVerify(BaseModel):
+    phone_number: str = Field(
+        min_length=10,
+        max_length=20,
+    )
+    otp: str = Field(
+        min_length=6,
+        max_length=6,
+        pattern=r"^\d{6}$",
+    )
+
+class PasswordResetRequest(BaseModel):
+    reset_token: str
+    new_password: str = Field(min_length=8, max_length=128)
+    confirm_password: str = Field(min_length=8, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_passwords(self):
+        if self.new_password != self.confirm_password:
+            raise ValueError("Passwords do not match")
+        return self

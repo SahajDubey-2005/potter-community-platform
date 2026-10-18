@@ -1,0 +1,24 @@
+from datetime import datetime, timezone
+
+from sqlalchemy.orm import Session
+
+from app.models import Notification
+
+
+def create_notification(
+    db: Session,
+    user_id: int,
+    title: str,
+    message: str,
+    category: str = "community",
+) -> Notification:
+    notification = Notification(
+        user_id=user_id,
+        title=title,
+        message=message,
+        category=category,
+        is_read=False,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(notification)
+    return notification
