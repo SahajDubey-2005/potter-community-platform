@@ -754,18 +754,22 @@ def get_my_profile(
 ):
     """Return the authenticated user's profile and membership status."""
     role_record = current_user.role_record
+    role_permissions = role_record.permissions or [] if role_record is not None else []
     has_term_history = role_record is not None and db.query(CommitteeAssignment.id).filter(
         CommitteeAssignment.user_id == current_user.id,
         CommitteeAssignment.role_id == current_user.role_id,
     ).first() is not None
-    role_is_current = not has_term_history or user_has_any_permission(current_user, tuple(role_record.permissions or []), db)
+    role_is_current = role_record is not None and (
+        not has_term_history
+        or user_has_any_permission(current_user, tuple(role_permissions), db)
+    )
     return {
         "id": current_user.id,
         "full_name": current_user.full_name,
         "phone_number": current_user.phone_number,
         "email": current_user.email,
         "role": role_record.name if role_record and role_is_current else "CITIZEN" if has_term_history else current_user.role,
-        "permissions": (role_record.permissions or []) if role_record and role_is_current else [],
+        "permissions": role_permissions if role_is_current else [],
         "is_active": current_user.is_active,
         "membership_status": current_user.membership_status,
         "membership_number": current_user.membership_number,

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import {
   Home,
   Users,
@@ -993,7 +994,6 @@ function Header({
         .map((part) => part[0]?.toUpperCase())
         .join("")
     : "PC";
-
   return (
     <header className="top-header">
       <div className="header-left">
@@ -4985,6 +4985,7 @@ function ProfilePage() {
         .map((part) => part[0]?.toUpperCase())
         .join("")
     : "PC";
+  const membershipStatus = String(profile.membershipStatus || "PENDING").toUpperCase();
 
   if (editing) {
     return (
@@ -5329,7 +5330,7 @@ function ProfilePage() {
             </div>
 
             <p>
-              Verified Potter Community Member
+              {profile.role ? `${profile.role} account` : membershipStatus === "APPROVED" ? "Verified Potter Community Member" : "Membership application"}
             </p>
 
             <span className="membership-id">
@@ -5355,7 +5356,7 @@ function ProfilePage() {
         <div className="profile-basic-grid">
           <ProfileDetail
             label="Role"
-            value="Member"
+            value={profile.role || "Member"}
           />
 
           <ProfileDetail
@@ -5368,6 +5369,32 @@ function ProfilePage() {
             value={membershipStatus === "APPROVED" ? profile.membershipId : "Assigned after approval"}
           />
         </div>
+
+        <section style={{ marginTop: 22, padding: 20, border: "1px solid #ead8cc", borderRadius: 14, background: "#fffdfb" }}>
+          <div style={{ marginBottom: 14 }}>
+            <span style={{ color: "#a95736", fontSize: 10, fontWeight: 800, letterSpacing: ".12em" }}>MEMBERSHIP</span>
+            <h2 style={{ margin: "5px 0", color: "#503326", fontSize: 19 }}>Member card & QR code</h2>
+            <p style={{ margin: 0, color: "#806b5e", fontSize: 12 }}>Your QR code contains only your membership ID.</p>
+          </div>
+          {membershipStatus === "APPROVED" && profile.membershipId ? <>
+            <style>{`@media print { body * { visibility: hidden !important; } #potter-membership-card, #potter-membership-card * { visibility: visible !important; } #potter-membership-card { position: fixed !important; left: 0 !important; top: 0 !important; width: 100% !important; margin: 0 !important; border: 0 !important; box-shadow: none !important; } .potter-membership-print-action { display: none !important; } }`}</style>
+            <div id="potter-membership-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 18, flexWrap: "wrap", maxWidth: 620, padding: 22, border: "1px solid #d9b49e", borderRadius: 16, background: "linear-gradient(125deg, #fff8f1 0%, #f3dfd0 100%)", boxShadow: "0 8px 24px rgba(80, 51, 38, .08)" }}>
+              <div style={{ minWidth: 210, flex: "1 1 250px" }}>
+                <div style={{ color: "#a95736", fontSize: 10, fontWeight: 900, letterSpacing: ".14em" }}>POTTER COMMUNITY</div>
+                <h3 style={{ margin: "12px 0 4px", color: "#503326", fontSize: 21 }}>{profile.fullName || "Community Member"}</h3>
+                <div style={{ color: "#6f5b4e", fontSize: 12 }}>{profile.role || "Member"}</div>
+                <div style={{ marginTop: 16, color: "#806b5e", fontSize: 10, fontWeight: 700, letterSpacing: ".08em" }}>MEMBERSHIP ID</div>
+                <strong style={{ display: "block", marginTop: 3, color: "#a95736", fontSize: 15 }}>{profile.membershipId}</strong>
+                <div style={{ marginTop: 10, color: "#4c7043", fontSize: 11, fontWeight: 800 }}>✓ VERIFIED MEMBER</div>
+              </div>
+              <div style={{ padding: 10, borderRadius: 10, background: "white", textAlign: "center" }}>
+                <QRCodeSVG value={profile.membershipId} size={128} level="M" title={`Membership ID ${profile.membershipId}`} />
+                <div style={{ marginTop: 4, color: "#806b5e", fontSize: 9 }}>Scan membership ID</div>
+              </div>
+            </div>
+            <button type="button" className="btn btn-outline potter-membership-print-action" onClick={() => window.print()} style={{ marginTop: 12 }}>Print member card</button>
+          </> : <p style={{ margin: 0, padding: 13, borderRadius: 10, background: "#fff8f2", color: "#806b5e", fontSize: 12 }}>{membershipStatus === "APPROVED" ? "A member card and QR code will be available when your membership ID is assigned." : "A member card and QR code will be available after membership approval."}</p>}
+        </section>
 
         <FamilyMembersPanel />
       </div>
@@ -5637,7 +5664,7 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
   const [assignmentMinutesReference, setAssignmentMinutesReference] = useState("");
   const [adminDraft, setAdminDraft] = useState({ full_name: "", email: "", phone_number: "", password: "" });
   const [adminBusy, setAdminBusy] = useState(false);
-  const canManageRoles = String(activeUser?.role || "").toUpperCase() === "ADMIN" || activeUser?.permissions?.includes("roles.manage");
+  const canManageRoles = ["ADMIN", "SUPER ADMIN"].includes(String(activeUser?.role || "").toUpperCase()) || activeUser?.permissions?.includes("roles.manage");
   const canCreateAdmins = ["ADMIN", "SUPER ADMIN"].includes(String(activeUser?.role || "").toUpperCase());
   const permissionOptions = [
     ["membership.view", "View member status"],
@@ -5716,8 +5743,32 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
+  const deleteRole = async (role) => {
+    if (!window.confirm(`Delete the custom role “${role.name}”? This cannot be undone.`)) return;
+    setRoleError("");
+    setRoleNotice("");
+    try {
+      await authApi(`/admin/roles/${role.id}`, { method: "DELETE" });
+      setRoleNotice(`Role “${role.name}” was deleted.`);
+      if (editingRoleId === role.id) {
+        setEditingRoleId(null);
+        setRoleDraft({ name: "", description: "", permissions: [], is_active: true });
+      }
+      await loadRoleManagement();
+    } catch (error) {
+      setRoleError(error.message || "Could not delete this role.");
+    }
+  };
+
   const assignRole = async (userId, roleId) => {
     if (!roleId) return;
+    const selectedRole = roles.find((role) => role.id === Number(roleId));
+    const electedRoles = ["PRESIDENT / HEAD", "SECRETARY", "TREASURER", "DIRECTOR", "NOMINATED DIRECTOR"];
+    if (electedRoles.includes(String(selectedRole?.name || "").trim().toUpperCase()) && (!assignmentTermStart || !assignmentTermEnd)) {
+      setRoleNotice("");
+      setRoleError("This elected committee role needs both term dates. Enter the start and end dates below, then assign the role again.");
+      return;
+    }
     setRoleError("");
     setRoleNotice("");
     try {
@@ -5738,7 +5789,7 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
   };
 
   const revokeRole = async (user) => {
-    const reason = window.prompt(`Reason for ending ${user.full_name}'s committee role?`);
+    const reason = window.prompt(`Reason for removing ${user.full_name} from the committee? Their member account will remain active.`);
     if (!reason || reason.trim().length < 3) return;
     setRoleError("");
     setRoleNotice("");
@@ -5747,10 +5798,25 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
         method: "PATCH",
         body: JSON.stringify({ reason: reason.trim() }),
       });
-      setRoleNotice("Committee role ended and recorded in assignment history.");
+      setRoleNotice(`${user.full_name} was removed from the committee. Their member account remains active, and the change is recorded in assignment history.`);
       await loadRoleManagement();
     } catch (error) {
       setRoleError(error.message || "Could not revoke this role.");
+    }
+  };
+
+  const deleteMemberAccount = async (user) => {
+    const confirmed = window.confirm(`Permanently delete ${user.full_name}'s member account, committee assignment history, uploaded documents, and personal applications? This cannot be undone.`);
+    if (!confirmed) return;
+    if (window.prompt(`Type DELETE to permanently remove ${user.full_name}'s account.`) !== "DELETE") return;
+    setRoleError("");
+    setRoleNotice("");
+    try {
+      await authApi(`/admin/roles/members/${user.id}`, { method: "DELETE" });
+      setRoleNotice(`${user.full_name}'s member account and personal application data were permanently deleted.`);
+      await loadRoleManagement();
+    } catch (error) {
+      setRoleError(error.message || "Could not delete this member account.");
     }
   };
 
@@ -5824,19 +5890,20 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
         </details>}
 
         <div style={{ display: "grid", gap: 9, marginTop: 14 }}>
-          {roles.map((role) => <div key={role.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: 12, border: "1px solid #efe2d8", borderRadius: 9 }}><div><strong style={{ color: "#503326" }}>{role.name}</strong><div style={{ color: "#806b5e", fontSize: 11, marginTop: 3 }}>{role.description || "No description"} · {role.users_count} assigned · {role.is_active ? "Active" : "Inactive"}</div><div style={{ color: "#806b5e", fontSize: 11, marginTop: 3 }}>Permissions: {(role.permissions || []).length ? role.permissions.join(", ") : "None"}</div></div><button type="button" className="btn btn-outline" onClick={() => editRole(role)}>Edit</button></div>)}
+          {roles.map((role) => <div key={role.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: 12, border: "1px solid #efe2d8", borderRadius: 9 }}><div><strong style={{ color: "#503326" }}>{role.name}</strong><div style={{ color: "#806b5e", fontSize: 11, marginTop: 3 }}>{role.description || "No description"} · {role.users_count} assigned · {role.is_active ? "Active" : "Inactive"}</div><div style={{ color: "#806b5e", fontSize: 11, marginTop: 3 }}>Permissions: {(role.permissions || []).length ? role.permissions.join(", ") : "None"}</div></div><div style={{ display: "flex", gap: 8 }}><button type="button" className="btn btn-outline" onClick={() => editRole(role)}>Edit</button>{!role.is_system && <button type="button" className="btn btn-outline" onClick={() => deleteRole(role)}>Delete role</button>}</div></div>)}
         </div>
 
         <h3 style={{ margin: "20px 0 8px", color: "#503326", fontSize: 15 }}>Assign or end a role for an approved member</h3>
-        <details style={{ margin: "10px 0 13px", padding: 10, border: "1px solid #f0e2d8", borderRadius: 9 }}>
-        <summary style={{ color: "#806b5e", fontSize: 11, cursor: "pointer" }}>Optional term dates and meeting reference</summary>
+        <div style={{ margin: "10px 0 13px", padding: 10, border: "1px solid #f0e2d8", borderRadius: 9 }}>
+        <strong style={{ color: "#624b3d", fontSize: 11 }}>Term dates and meeting reference</strong>
+        <p style={{ color: "#806b5e", fontSize: 11, margin: "4px 0 0" }}>Term start and end dates are required for President / Head, Secretary, Treasurer, Director, and Nominated Director roles. They are optional for other roles.</p>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 9, marginTop: 10 }}>
           <label style={{ display: "grid", gap: 5, color: "#806b5e", fontSize: 11 }}>Term starts<input type="date" value={assignmentTermStart} onChange={(event) => setAssignmentTermStart(event.target.value)} style={{ padding: 9, border: "1px solid #ddc9b7", borderRadius: 8, background: "#fffdfb" }} /></label>
           <label style={{ display: "grid", gap: 5, color: "#806b5e", fontSize: 11 }}>Term ends<input type="date" min={assignmentTermStart || undefined} value={assignmentTermEnd} onChange={(event) => setAssignmentTermEnd(event.target.value)} style={{ padding: 9, border: "1px solid #ddc9b7", borderRadius: 8, background: "#fffdfb" }} /></label>
           <label style={{ display: "grid", gap: 5, color: "#806b5e", fontSize: 11 }}>Signed minutes / resolution reference<input value={assignmentMinutesReference} onChange={(event) => setAssignmentMinutesReference(event.target.value)} maxLength={255} placeholder="Optional meeting reference" style={{ padding: 9, border: "1px solid #ddc9b7", borderRadius: 8, background: "#fffdfb" }} /></label>
         </div>
-        </details>
-        {roleUsers.length ? <div style={{ display: "grid", gap: 8 }}>{roleUsers.map((user) => <div key={user.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: 11, border: "1px solid #efe2d8", borderRadius: 9 }}><div><strong style={{ color: "#503326", fontSize: 13 }}>{user.full_name}</strong><div style={{ color: "#806b5e", fontSize: 11 }}>{user.membership_number || user.email || `Member #${user.id}`} · Current role: {user.role}</div></div><div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}><select aria-label={`Assign role to ${user.full_name}`} value="" onChange={(event) => assignRole(user.id, event.target.value)} style={{ minWidth: 220, padding: 9, border: "1px solid #ddc9b7", borderRadius: 8, background: "#fffdfb", color: "#503326" }}><option value="" disabled>Assign committee role…</option>{roles.filter((role) => role.is_active && role.name.toUpperCase() !== "ADMIN").map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select>{user.role_id && user.role.toUpperCase() !== "CITIZEN" && user.role.toUpperCase() !== "ADMIN" && <button type="button" className="btn btn-outline" onClick={() => revokeRole(user)}>End role</button>}</div></div>)}</div> : <p style={{ color: "#806b5e", fontSize: 12 }}>No approved active members are available for role assignment.</p>}
+        </div>
+        {roleUsers.length ? <div style={{ display: "grid", gap: 8 }}>{roleUsers.map((user) => <div key={user.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: 11, border: "1px solid #efe2d8", borderRadius: 9 }}><div><strong style={{ color: "#503326", fontSize: 13 }}>{user.full_name}</strong><div style={{ color: "#806b5e", fontSize: 11 }}>{user.membership_number || user.email || `Member #${user.id}`} · Current role: {user.role}</div></div><div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}><select aria-label={`Assign role to ${user.full_name}`} value="" onChange={(event) => assignRole(user.id, event.target.value)} style={{ minWidth: 220, padding: 9, border: "1px solid #ddc9b7", borderRadius: 8, background: "#fffdfb", color: "#503326" }}><option value="" disabled>Assign committee role…</option>{roles.filter((role) => role.is_active && role.name.toUpperCase() !== "ADMIN").map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select>{user.role_id && !["CITIZEN", "ADMIN", "SUPER ADMIN"].includes(user.role.toUpperCase()) && <button type="button" className="btn btn-outline" onClick={() => revokeRole(user)}>Remove from committee</button>}{canCreateAdmins && !["ADMIN", "SUPER ADMIN"].includes(user.role.toUpperCase()) && <button type="button" className="btn btn-outline" onClick={() => deleteMemberAccount(user)}>Delete member account</button>}</div></div>)}</div> : <p style={{ color: "#806b5e", fontSize: 12 }}>No approved active members are available for role assignment.</p>}
 
         <details style={{ marginTop: 16, padding: 10, border: "1px solid #f0e2d8", borderRadius: 9 }}>
         <summary style={{ color: "#624b3d", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Committee term and handover history</summary>

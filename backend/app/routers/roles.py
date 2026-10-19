@@ -8,7 +8,31 @@ from sqlalchemy.orm import Session
 
 from app.auth import get_current_user, get_password_hash, require_permission
 from app.database import get_db
-from app.models import CommitteeAssignment, Role, User
+from app.models import (
+    ActivityLog,
+    AssistanceApplication,
+    AssistanceBenefit,
+    AssistanceDocument,
+    CommitteeAssignment,
+    CommunityEvent,
+    CommunityRecord,
+    EventRegistration,
+    FamilyMember,
+    FinancePolicy,
+    FinancialRefund,
+    FinancialTransaction,
+    MatrimonialProfile,
+    Notification,
+    PasswordResetToken,
+    Role,
+    ScholarshipApplication,
+    ScholarshipBenefit,
+    ScholarshipDocument,
+    ScholarshipScheme,
+    User,
+    Verification,
+)
+from app.private_documents import private_document_path
 
 
 router = APIRouter(prefix="/admin/roles", tags=["Role management"])
@@ -29,6 +53,14 @@ AVAILABLE_PERMISSIONS = {
     "community.records.manage",
     "community.approve",
     "marketplace.manage",
+}
+
+SYSTEM_ROLE_NAMES = {
+    "ADMIN", "ARTISAN", "CITIZEN", "SUPER ADMIN", "PRESIDENT / HEAD",
+    "SECRETARY", "TREASURER", "DIRECTOR", "NOMINATED DIRECTOR",
+    "VERIFICATION OFFICER", "SCHOLARSHIP OFFICER", "MATRIMONIAL COORDINATOR",
+    "EVENT COORDINATOR", "MEDIA COORDINATOR", "LEGAL GRIEVANCE COORDINATOR",
+    "POTTER MARKET ENGAGEMENT COORDINATOR",
 }
 
 
@@ -76,6 +108,7 @@ def serialize_role(role: Role, users_count: int = 0) -> dict:
         "permissions": role.permissions or [],
         "is_active": role.is_active,
         "users_count": users_count,
+        "is_system": role.name.strip().upper() in SYSTEM_ROLE_NAMES,
         "created_at": role.created_at.isoformat(),
     }
 
@@ -189,6 +222,26 @@ def update_role(
     db.commit()
     db.refresh(role)
     return serialize_role(role, db.query(User).filter(User.role_id == role.id).count())
+
+
+@router.delete("/{role_id}")
+def delete_role(
+    role_id: int,
+    current_user: User = Depends(require_permission("roles.manage")),
+    db: Session = Depends(get_db),
+):
+    role = db.query(Role).filter(Role.id == role_id).first()
+    if role is None:
+        raise HTTPException(status_code=404, detail="Role not found")
+    if role.name.strip().upper() in SYSTEM_ROLE_NAMES:
+        raise HTTPException(status_code=403, detail="Built-in community roles cannot be deleted. Deactivate the role if it should no longer be assigned.")
+    has_users = db.query(User.id).filter(User.role_id == role.id).first() is not None
+    has_history = db.query(CommitteeAssignment.id).filter(CommitteeAssignment.role_id == role.id).first() is not None
+    if has_users or has_history:
+        raise HTTPException(status_code=409, detail="This role has members or assignment history. Deactivate it instead to preserve those records.")
+    db.delete(role)
+    db.commit()
+    return {"role_id": role_id, "message": "Role deleted"}
 
 
 @router.get("/users")
@@ -308,6 +361,104 @@ def revoke_role(
     user.role = "CITIZEN"
     db.commit()
     return {"user_id": user.id, "role": user.role, "status": "REVOKED"}
+
+
+@router.delete("/members/{user_id}")
+def delete_member_account(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Permanently remove a member and their personal application data."""
+    require_platform_admin(current_user)
+    if current_user.id == user_id:
+        raise HTTPException(status_code=409, detail="You cannot delete your own account")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="Member not found")
+    member_role = (user.role_record.name if user.role_record else user.role or "").strip().upper()
+    if member_role in {"ADMIN", "SUPER ADMIN"}:
+        raise HTTPException(status_code=403, detail="Platform Admin accounts cannot be deleted here")
+
+    scholarship_application_ids = [row[0] for row in db.query(ScholarshipApplication.id).filter(ScholarshipApplication.user_id == user_id).all()]
+    assistance_application_ids = [row[0] for row in db.query(AssistanceApplication.id).filter(AssistanceApplication.user_id == user_id).all()]
+
+    # Keep financial records and community material attributable. Refuse the
+    # permanent deletion if this account authored records that must be retained.
+    protected_records = [
+        (db.query(FinancialTransaction.id).filter(FinancialTransaction.user_id == user_id).first(), "financial transactions"),
+        (db.query(FinancialRefund.id).filter(FinancialRefund.created_by_id == user_id).first(), "financial refunds"),
+        (db.query(CommunityRecord.id).filter(CommunityRecord.created_by_id == user_id).first(), "official community records"),
+        (db.query(CommunityEvent.id).filter(CommunityEvent.created_by_id == user_id).first(), "community events"),
+        (db.query(ScholarshipScheme.id).filter(ScholarshipScheme.created_by_id == user_id).first(), "scholarship schemes"),
+        (db.query(CommitteeAssignment.id).filter(CommitteeAssignment.assigned_by_id == user_id, CommitteeAssignment.user_id != user_id).first(), "committee assignments made for other members"),
+        (db.query(ScholarshipBenefit.id).filter(ScholarshipBenefit.recorded_by_id == user_id, ScholarshipBenefit.user_id != user_id).first(), "scholarship benefit records for other members"),
+        (db.query(AssistanceBenefit.id).filter(AssistanceBenefit.recorded_by_id == user_id, AssistanceBenefit.application_id.notin_(db.query(AssistanceApplication.id).filter(AssistanceApplication.user_id == user_id))).first(), "assistance benefit records for other members"),
+    ]
+    retained_record_types = [label for record, label in protected_records if record is not None]
+    if retained_record_types:
+        raise HTTPException(
+            status_code=409,
+            detail="This account is linked to retained " + ", ".join(retained_record_types) + ". Deactivate the account instead of permanently deleting it.",
+        )
+
+    document_names: set[str] = set()
+    verification_rows = db.query(Verification).filter(Verification.user_id == user_id).all()
+    document_names.update(row.document_url for row in verification_rows if row.document_url)
+    scholarship_documents = db.query(ScholarshipDocument).filter(ScholarshipDocument.application_id.in_(scholarship_application_ids)).all() if scholarship_application_ids else []
+    document_names.update(row.file_name for row in scholarship_documents if row.file_name)
+    scholarship_benefits = db.query(ScholarshipBenefit).filter(ScholarshipBenefit.application_id.in_(scholarship_application_ids)).all() if scholarship_application_ids else []
+    document_names.update(row.proof_file_name for row in scholarship_benefits if row.proof_file_name)
+    assistance_documents = db.query(AssistanceDocument).filter(AssistanceDocument.application_id.in_(assistance_application_ids)).all() if assistance_application_ids else []
+    document_names.update(row.file_name for row in assistance_documents if row.file_name)
+    assistance_benefits = db.query(AssistanceBenefit).filter(AssistanceBenefit.application_id.in_(assistance_application_ids)).all() if assistance_application_ids else []
+    document_names.update(row.proof_file_name for row in assistance_benefits if row.proof_file_name)
+
+    try:
+        # Preserve the audit trail while detaching references to the deleted user.
+        db.query(ActivityLog).filter(ActivityLog.actor_user_id == user_id).update({ActivityLog.actor_user_id: None}, synchronize_session=False)
+        db.query(FinancePolicy).filter(FinancePolicy.updated_by_id == user_id).update({FinancePolicy.updated_by_id: None}, synchronize_session=False)
+        db.query(FinancialTransaction).filter(FinancialTransaction.verified_by_id == user_id).update({FinancialTransaction.verified_by_id: None}, synchronize_session=False)
+        db.query(FinancialTransaction).filter(FinancialTransaction.reconciled_by_id == user_id).update({FinancialTransaction.reconciled_by_id: None}, synchronize_session=False)
+        db.query(CommunityRecord).filter(CommunityRecord.approved_by_id == user_id).update({CommunityRecord.approved_by_id: None}, synchronize_session=False)
+        db.query(CommunityEvent).filter(CommunityEvent.approved_by_id == user_id).update({CommunityEvent.approved_by_id: None}, synchronize_session=False)
+        db.query(EventRegistration).filter(EventRegistration.attendance_marked_by_id == user_id).update({EventRegistration.attendance_marked_by_id: None}, synchronize_session=False)
+        db.query(MatrimonialProfile).filter(MatrimonialProfile.reviewed_by_id == user_id).update({MatrimonialProfile.reviewed_by_id: None}, synchronize_session=False)
+        db.query(CommitteeAssignment).filter(CommitteeAssignment.ended_by_id == user_id).update({CommitteeAssignment.ended_by_id: None}, synchronize_session=False)
+
+        db.query(Verification).filter(Verification.user_id == user_id).delete(synchronize_session=False)
+        db.query(PasswordResetToken).filter(PasswordResetToken.user_id == user_id).delete(synchronize_session=False)
+        db.query(Notification).filter(Notification.user_id == user_id).delete(synchronize_session=False)
+        db.query(FamilyMember).filter(FamilyMember.primary_user_id == user_id).delete(synchronize_session=False)
+        db.query(CommitteeAssignment).filter(CommitteeAssignment.user_id == user_id).delete(synchronize_session=False)
+        db.query(EventRegistration).filter(EventRegistration.user_id == user_id).delete(synchronize_session=False)
+        db.query(MatrimonialProfile).filter(MatrimonialProfile.user_id == user_id).delete(synchronize_session=False)
+
+        if scholarship_application_ids:
+            db.query(ScholarshipDocument).filter(ScholarshipDocument.application_id.in_(scholarship_application_ids)).delete(synchronize_session=False)
+            db.query(ScholarshipBenefit).filter(ScholarshipBenefit.application_id.in_(scholarship_application_ids)).delete(synchronize_session=False)
+            db.query(ScholarshipApplication).filter(ScholarshipApplication.id.in_(scholarship_application_ids)).delete(synchronize_session=False)
+        db.query(ScholarshipBenefit).filter(ScholarshipBenefit.user_id == user_id).delete(synchronize_session=False)
+
+        if assistance_application_ids:
+            db.query(AssistanceDocument).filter(AssistanceDocument.application_id.in_(assistance_application_ids)).delete(synchronize_session=False)
+            db.query(AssistanceBenefit).filter(AssistanceBenefit.application_id.in_(assistance_application_ids)).delete(synchronize_session=False)
+            db.query(AssistanceApplication).filter(AssistanceApplication.id.in_(assistance_application_ids)).delete(synchronize_session=False)
+
+        db.delete(user)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    for stored_name in document_names:
+        try:
+            private_document_path(stored_name).unlink(missing_ok=True)
+        except (OSError, HTTPException):
+            pass
+
+    return {"message": "Member account and personal application data permanently deleted", "user_id": user_id}
 
 
 @router.get("/assignments")
