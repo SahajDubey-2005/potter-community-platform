@@ -3053,6 +3053,84 @@ button {
   border: 1px solid #eadbd1;
 }
 
+.auth-modal-signup {
+  width: min(760px, calc(100vw - 32px));
+  max-width: 760px;
+  padding: 30px 34px;
+}
+
+.auth-form-signup {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 18px;
+  align-items: start;
+}
+
+.auth-form-signup > .form-group:has(input[name="phone"]) {
+  grid-column: 1 / -1;
+}
+
+.auth-form-signup > .form-group:has(input[type="file"]) {
+  grid-column: 1 / -1;
+}
+
+.auth-form-signup > .auth-submit,
+.auth-form-signup > [role="alert"],
+.auth-form-signup > [role="status"] {
+  grid-column: 1 / -1;
+}
+
+.auth-modal-signup .form-group {
+  min-width: 0;
+  margin-bottom: 10px;
+}
+
+.auth-form-signup > .form-group:has(.signup-address-field) {
+  grid-column: 1 / -1;
+}
+
+.signup-address-field {
+  display: block;
+  width: 100%;
+  min-height: 88px;
+  padding: 11px 12px;
+  box-sizing: border-box;
+  resize: vertical;
+  border: 1px solid #dfd1c8;
+  border-radius: 8px;
+  outline: none;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.signup-address-field::placeholder {
+  color: #95877e;
+  opacity: 1;
+}
+
+.signup-address-field:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(166, 90, 58, 0.08);
+}
+
+@media (max-width: 620px) {
+  .auth-modal-signup {
+    padding: 24px 20px;
+  }
+
+  .auth-form-signup {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .auth-form-signup > .form-group:has(input[name="phone"]),
+  .auth-form-signup > .form-group:has(input[type="file"]) {
+    grid-column: auto;
+  }
+}
+
 .modal-close {
   position: absolute;
 

@@ -380,6 +380,36 @@ class ScholarshipBenefit(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
 
 
+class MarketplaceProduct(Base):
+    __tablename__ = "marketplace_products"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    seller_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str] = mapped_column(String(2000), nullable=False)
+    category: Mapped[str] = mapped_column(String(80), nullable=False)
+    price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    image_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
+class MarketplaceOrder(Base):
+    __tablename__ = "marketplace_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, nullable=True)
+    buyer_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    buyer_phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    buyer_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    delivery_address: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    items: Mapped[list[dict]] = mapped_column(JSON, nullable=False)
+    total_amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="REQUESTED", nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
 class PhoneOTP(Base):
     __tablename__ = "phone_otps"
 

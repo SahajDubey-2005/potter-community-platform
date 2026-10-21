@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timezone
 from jose import JWTError, jwt
 
-from app.routers import auth, verification, roles, notifications, audit, family, community_records, finance, scholarships, assistance, events, matrimonial
+from app.routers import auth, verification, roles, notifications, audit, family, community_records, finance, scholarships, assistance, events, matrimonial, marketplace
 from app.auth import ALGORITHM, SECRET_KEY
 from app.database import SessionLocal
 from app.models import ActivityLog
@@ -33,6 +33,7 @@ app.include_router(scholarships.router)
 app.include_router(assistance.router)
 app.include_router(events.router)
 app.include_router(matrimonial.router)
+app.include_router(marketplace.router)
 
 
 def record_activity(request, status_code: int) -> None:

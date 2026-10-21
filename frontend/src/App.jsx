@@ -399,7 +399,6 @@ const scholarships = [
    profiles are presented as real.
 ========================================================= */
 
-const products = [];
 const members = [];
 const matrimonialProfiles = [];
 
@@ -767,6 +766,7 @@ function App() {
     // Shopping is public; seller and advanced marketplace tools require membership.
     setCart((previousCart) => [...previousCart, product]);
   };
+  const removeCartItem = (index) => setCart((previousCart) => previousCart.filter((_, itemIndex) => itemIndex !== index));
 
   const membershipReviewStage = reviewingMembership?.review_stage || "ADMIN_REVIEW";
   const isPlatformAdmin = String(activeUser?.role || "").toUpperCase() === "ADMIN";
@@ -823,6 +823,8 @@ function App() {
             setSearch={setSearch}
             addToCart={addToCart}
             cart={cart}
+            clearCart={() => setCart([])}
+            removeCartItem={removeCartItem}
           />
         ) : (
           <MemberContent
@@ -848,6 +850,8 @@ function App() {
             setSearch={setSearch}
             addToCart={addToCart}
             cart={cart}
+            clearCart={() => setCart([])}
+            removeCartItem={removeCartItem}
           />
         )}
       </div>
@@ -986,8 +990,16 @@ function Header({
       );
   }, []);
 
-  const initials = profile.fullName
-    ? profile.fullName
+  // The authenticated account is the source of truth for the header identity.
+  // `potterProfile` is browser-wide and can belong to a previous account.
+  const displayName =
+    activeUser?.full_name ||
+    activeUser?.fullName ||
+    activeUser?.name ||
+    profile.fullName ||
+    "Your Name";
+  const initials = displayName !== "Your Name"
+    ? displayName
         .trim()
         .split(/\s+/)
         .slice(0, 2)
@@ -1088,7 +1100,7 @@ function Header({
             </div>
 
             <div className="mini-profile-text">
-              <strong>{profile.fullName || "Your Name"}</strong>
+              <strong>{displayName}</strong>
               <span>{activeRole || "General Member"}</span>
             </div>
           </div>
@@ -1359,9 +1371,9 @@ function ScholarshipTypeTabs({ value, onChange, nationalCount, stateCount }) {
    PUBLIC CONTENT
 ========================================================= */
 
-function PublicContent({ currentPage, navigate, setAuthModal, openMemberFeature, search, setSearch, addToCart, cart }) {
+function PublicContent({ currentPage, navigate, setAuthModal, openMemberFeature, search, setSearch, addToCart, cart, clearCart, removeCartItem }) {
   if (currentPage === "marketplace") {
-    return <MarketplacePage authenticated={false} navigate={navigate} search={search} setSearch={setSearch} addToCart={addToCart} cart={cart} setAuthModal={setAuthModal} />;
+    return <MarketplacePage authenticated={false} navigate={navigate} search={search} setSearch={setSearch} addToCart={addToCart} cart={cart} clearCart={clearCart} removeCartItem={removeCartItem} setAuthModal={setAuthModal} />;
   }
   return <PublicHome setAuthModal={setAuthModal} navigate={navigate} openMemberFeature={openMemberFeature} />;
 }
@@ -1618,10 +1630,108 @@ function PublicHome({ setAuthModal, navigate, openMemberFeature }) {
 /* =========================================================
    MARKETPLACE — FREE PUBLIC BROWSING
 ========================================================= */
-function MarketplacePage({ authenticated, navigate, search, setSearch, addToCart, cart, setAuthModal }) {
-  const filteredProducts = products.filter((product) =>
-    `${product.name || ""} ${product.description || ""} ${product.category || ""}`.toLowerCase().includes(search.toLowerCase())
+function MarketplacePage({ authenticated, navigate, search, setSearch, addToCart, cart, clearCart = () => {}, removeCartItem = () => {}, setAuthModal, activeUser = null }) {
+  const [products, setProducts] = useState([]);
+  const [loadingProducts, setLoadingProducts] = useState(true);
+  const [marketNotice, setMarketNotice] = useState("");
+  const [productBusy, setProductBusy] = useState(false);
+  const [editingProductId, setEditingProductId] = useState(null);
+  const [productDraft, setProductDraft] = useState({ name: "", description: "", category: "Home & décor", price: "", image_url: "" });
+  const [orders, setOrders] = useState([]);
+  const [categoryFilter, setCategoryFilter] = useState("All pottery");
+  const [sortOrder, setSortOrder] = useState("newest");
+  const [buyerDetails, setBuyerDetails] = useState({ name: activeUser?.full_name || "", phone: activeUser?.phone_number || "", email: activeUser?.email || "", address: "" });
+  const canManage = authenticated && (
+    ["ADMIN", "SUPER ADMIN"].includes(String(activeUser?.role || "").toUpperCase())
+    || activeUser?.permissions?.includes("marketplace.manage")
   );
+  const isApprovedMember = authenticated && String(activeUser?.membership_status || "").toUpperCase() === "APPROVED";
+  const canPublish = isApprovedMember;
+  const loadProducts = async () => {
+    setLoadingProducts(true);
+    try {
+      const rows = await authApi("/marketplace/products");
+      setProducts(Array.isArray(rows) ? rows : []);
+    } catch (error) {
+      setMarketNotice(error.message || "Could not load marketplace listings.");
+    } finally {
+      setLoadingProducts(false);
+    }
+  };
+  const loadOrders = async () => {
+    if (!authenticated) return;
+    try {
+      const rows = await authApi(canManage || isApprovedMember ? "/marketplace/seller-orders" : "/marketplace/orders");
+      setOrders(Array.isArray(rows) ? rows : []);
+    } catch {
+      // Keep shopping usable when order history is not available.
+    }
+  };
+  useEffect(() => { loadProducts(); loadOrders(); }, [authenticated, canManage, isApprovedMember]);
+  const saveProduct = async (event) => {
+    event.preventDefault();
+    setProductBusy(true);
+    setMarketNotice("");
+    try {
+      await authApi(editingProductId ? `/marketplace/products/${editingProductId}` : "/marketplace/products", {
+        method: editingProductId ? "PATCH" : "POST",
+        body: JSON.stringify({ ...productDraft, price: Number(productDraft.price), image_url: productDraft.image_url.trim() || null }),
+      });
+      setProductDraft({ name: "", description: "", category: "Home & décor", price: "", image_url: "" });
+      setEditingProductId(null);
+      setMarketNotice(editingProductId ? "Listing updated." : "Your listing is now visible in the marketplace.");
+      await loadProducts();
+    } catch (error) {
+      setMarketNotice(error.message || "Could not save this listing.");
+    } finally {
+      setProductBusy(false);
+    }
+  };
+  const editProduct = (product) => {
+    setEditingProductId(product.id);
+    setProductDraft({ name: product.name, description: product.description, category: product.category, price: String(product.price), image_url: product.image || "" });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  const removeProduct = async (product) => {
+    if (!window.confirm(`Remove “${product.name}” from the marketplace?`)) return;
+    try {
+      await authApi(`/marketplace/products/${product.id}`, { method: "DELETE" });
+      setMarketNotice("Listing removed.");
+      await loadProducts();
+    } catch (error) {
+      setMarketNotice(error.message || "Could not remove this listing.");
+    }
+  };
+  const placeOrder = async () => {
+    if (!buyerDetails.name.trim() || buyerDetails.phone.replace(/\D/g, "").length < 10 || buyerDetails.address.trim().length < 8) {
+      setMarketNotice("Enter your name, a valid phone number, and delivery address to place the order.");
+      return;
+    }
+    const quantities = cart.reduce((result, item) => {
+      result[item.id] = (result[item.id] || 0) + 1;
+      return result;
+    }, {});
+    try {
+      const order = await authApi("/marketplace/orders", {
+        method: "POST",
+        body: JSON.stringify({
+          items: Object.entries(quantities).map(([product_id, quantity]) => ({ product_id: Number(product_id), quantity })),
+          buyer_name: buyerDetails.name.trim(), buyer_phone: buyerDetails.phone.trim(),
+          buyer_email: buyerDetails.email.trim() || null, delivery_address: buyerDetails.address.trim(),
+        }),
+      });
+      clearCart();
+      setMarketNotice(`Order request #${order.id} submitted. Total: ₹${Number(order.total_amount).toLocaleString("en-IN", { minimumFractionDigits: 2 })}. The artisan will contact you to arrange payment and delivery.`);
+      await loadOrders();
+    } catch (error) {
+      setMarketNotice(error.message || "Could not submit your order request. Please refresh listings and retry.");
+      await loadProducts();
+    }
+  };
+  const filteredProducts = products
+    .filter((product) => categoryFilter === "All pottery" || String(product.category || "").toLowerCase() === categoryFilter.toLowerCase())
+    .filter((product) => `${product.name || ""} ${product.description || ""} ${product.category || ""} ${product.seller_name || ""}`.toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => sortOrder === "price-low" ? Number(a.price) - Number(b.price) : sortOrder === "price-high" ? Number(b.price) - Number(a.price) : new Date(b.created_at) - new Date(a.created_at));
   return (
     <PageWrapper>
       <style>{`
@@ -1637,9 +1747,11 @@ function MarketplacePage({ authenticated, navigate, search, setSearch, addToCart
         .market-empty-icon{position:relative;display:grid;place-items:center;width:76px;height:76px;margin-bottom:18px;border-radius:25px;background:#ead2bd;color:#9b5237}.market-empty-icon:after{content:'✦';position:absolute;top:-8px;right:-5px;color:#b65f43;font-size:25px}
         .market-empty h2{margin:8px 0;font:500 clamp(25px,3vw,34px) Georgia,serif;color:#362920}.market-empty p{max-width:510px;margin:0 0 19px;color:#786d62;font-size:12px;line-height:1.8}
         .market-product{overflow:hidden;border:1px solid #e3d5c7;border-radius:17px;background:#fffdf9;box-shadow:0 6px 18px #3b29180b}.market-product-img{display:flex;align-items:center;justify-content:center;width:100%;height:190px;object-fit:cover;background:linear-gradient(145deg,#f1dfcc,#e2c2a6);color:#9a5237}.market-product-body{padding:16px}.market-product-body h3{margin:8px 0;font-size:15px;color:#382b21}.market-product-body p{color:#786d62;font-size:11px;line-height:1.65}.market-product-bottom{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:13px}.market-product-bottom strong{font-size:15px;color:#88432f}
-        .market-cart-bar{position:sticky;bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:15px;margin-top:22px;padding:14px 16px;border:1px solid #ddc8b6;border-radius:16px;background:#fffdf7f2;box-shadow:0 12px 30px #3623171c;backdrop-filter:blur(12px)}
+        .market-cart-bar{position:sticky;bottom:14px;display:flex;align-items:flex-start;justify-content:space-between;gap:15px;flex-wrap:wrap;margin-top:22px;padding:14px 16px;border:1px solid #ddc8b6;border-radius:16px;background:#fffdf7f2;box-shadow:0 12px 30px #3623171c;backdrop-filter:blur(12px)}
+        .market-buyer-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;width:100%}.market-buyer-fields input{min-width:0;padding:10px;border:1px solid #ddc9b7;border-radius:9px;font:inherit;font-size:12px}.market-buyer-fields .address{grid-column:1/-1}
         @media(max-width:650px){.market-public-banner{align-items:flex-start;flex-wrap:wrap;padding:16px}.market-cart-bar{align-items:flex-start;flex-direction:column}.market-cart-bar .btn{width:100%}}
       `}</style>
+      {marketNotice && <div role="status" style={{ margin: "0 0 16px", padding: "12px 14px", border: "1px solid #e8d2c0", borderRadius: 10, background: "#fff5eb", color: "#704a34", fontSize: 12 }}>{marketNotice}</div>}
       <div className="market-public-head">
         <div><span className="market-kicker"><ShoppingBag size={14}/> OPEN TO EVERYONE</span><PageHeader title="Potter Marketplace" description="Discover handmade pottery and support local artisans. Browsing is free for everyone — no membership required." /></div>
         <span className="market-free-badge"><CheckCircle size={14}/> Free public access</span>
@@ -1647,19 +1759,24 @@ function MarketplacePage({ authenticated, navigate, search, setSearch, addToCart
       <div className="market-public-banner">
         <div className="market-banner-icon"><ShoppingBag size={25}/></div>
         <div className="market-banner-copy"><strong>Every pot has a story. Find yours.</strong><span>Explore artisan-made pieces and help pottery makers reach more customers.</span></div>
-        {!authenticated && <button className="btn btn-outline" onClick={() => setAuthModal("signup")}>Become a seller <ArrowRight size={15}/></button>}
+        {!authenticated && <button className="btn btn-outline" onClick={() => setAuthModal("signup")}>Join to become a seller <ArrowRight size={15}/></button>}
+        {authenticated && !isApprovedMember && <span className="market-free-badge" title="Selling opens after membership approval">Membership approval required to sell</span>}
       </div>
       <div className="market-toolbar">
         <div className="search-box"><Search size={18}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search pottery, clay art, planters..." aria-label="Search marketplace products"/></div>
         <span style={{display:"inline-flex",alignItems:"center",gap:8,color:"#786d62",fontSize:11}}><ShoppingCart size={16}/>{cart.length ? `${cart.length} item(s) in cart` : "Browse freely — no membership needed"}</span>
       </div>
-      <div className="market-categories">{["All pottery","Home & décor","Planters","Tableware","Traditional craft"].map((category) => <button key={category} className="market-chip" onClick={() => setSearch(category === "All pottery" ? "" : category)}>{category}</button>)}</div>
+      <div className="market-toolbar" style={{ marginTop: -6 }}><span style={{ color: "#786d62", fontSize: 11 }}>{filteredProducts.length} product(s)</span><label style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "#786d62", fontSize: 11 }}>Sort by <select value={sortOrder} onChange={(event) => setSortOrder(event.target.value)} style={{ padding: "9px 12px", border: "1px solid #ddc9b7", borderRadius: 9, background: "#fffdf9", color: "#503326" }}><option value="newest">Newest</option><option value="price-low">Price: low to high</option><option value="price-high">Price: high to low</option></select></label></div>
+      <div className="market-categories">{["All pottery","Home & décor","Planters","Tableware","Traditional craft","Other pottery"].map((category) => <button key={category} className="market-chip" aria-pressed={categoryFilter === category} style={categoryFilter === category ? { background: "#a95338", color: "#fffaf4", borderColor: "#a95338" } : undefined} onClick={() => setCategoryFilter(category)}>{category}</button>)}</div>
+      {canPublish && <section style={{ marginBottom: 20, padding: 16, border: "1px solid #e3d5c7", borderRadius: 16, background: "#fffdf9" }}><h2 style={{ margin: "0 0 6px", color: "#503326", fontSize: 17 }}>{editingProductId ? "Edit marketplace listing" : "Sell your pottery"}</h2><p style={{margin:"0 0 12px",color:"#786d62",fontSize:12}}>Verified community members can add and manage their own products.</p><form onSubmit={saveProduct} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 10 }}><input required minLength={2} maxLength={160} placeholder="Product name" value={productDraft.name} onChange={(e) => setProductDraft({ ...productDraft, name: e.target.value })} /><select value={productDraft.category} onChange={(e) => setProductDraft({ ...productDraft, category: e.target.value })}>{["Home & décor", "Planters", "Tableware", "Traditional craft", "Other pottery"].map((item) => <option key={item}>{item}</option>)}</select><input required type="number" min="0.01" step="0.01" placeholder="Price (₹)" value={productDraft.price} onChange={(e) => setProductDraft({ ...productDraft, price: e.target.value })} /><input type="url" placeholder="Product image URL (optional)" value={productDraft.image_url} onChange={(e) => setProductDraft({ ...productDraft, image_url: e.target.value })} /><textarea required minLength={5} maxLength={2000} placeholder="Describe the item" value={productDraft.description} onChange={(e) => setProductDraft({ ...productDraft, description: e.target.value })} style={{ gridColumn: "1 / -1", minHeight: 74, padding: 10, border: "1px solid #ddc9b7", borderRadius: 9, font: "inherit" }} /><div style={{ gridColumn: "1 / -1", display: "flex", gap: 8, flexWrap: "wrap" }}><button className="btn btn-primary" type="submit" disabled={productBusy}>{productBusy ? "Saving…" : editingProductId ? "Save changes" : "Publish listing"}</button>{editingProductId && <button type="button" className="btn btn-outline" onClick={() => { setEditingProductId(null); setProductDraft({ name: "", description: "", category: "Home & décor", price: "", image_url: "" }); }}>Cancel</button>}</div></form></section>}
+      {loadingProducts && <div className="empty-state">Loading marketplace listings…</div>}
       {filteredProducts.length ? (
-        <div className="product-grid">{filteredProducts.map((product) => <article className="market-product" key={product.id}>{product.image ? <img className="market-product-img" src={product.image} alt={product.name}/> : <div className="market-product-img"><ShoppingBag size={32}/></div>}<div className="market-product-body"><span className="market-kicker">{product.category || "HANDCRAFTED POTTERY"}</span><h3>{product.name}</h3><p>{product.description || "A unique handmade piece crafted with care."}</p><div className="market-product-bottom"><strong>{product.price ? `₹${product.price}` : "Price on request"}</strong><button className="btn btn-primary" onClick={() => addToCart(product)}><ShoppingCart size={15}/> Add to cart</button></div></div></article>)}</div>
-      ) : (
-        <div className="market-empty"><div className="market-empty-icon"><ShoppingBag size={34}/></div><span className="market-kicker">THE ARTISAN SHELF</span><h2>{search ? "No matching pottery found" : "Beautiful things are being shaped."}</h2><p>{search ? "Try another keyword or choose All pottery to browse again." : "This public marketplace is ready for everyone. Product listings will appear here when artisans publish their work."}</p>{search ? <button className="btn btn-outline" onClick={() => setSearch("")}>Show all pottery</button> : <button className="btn btn-primary" onClick={() => setAuthModal("signup")}>Become a seller <ArrowRight size={16}/></button>}</div>
-      )}
-      {cart.length > 0 && <div className="market-cart-bar"><div style={{display:"flex",alignItems:"center",gap:10}}><ShoppingCart size={18}/><strong>{cart.length} item(s) in your cart</strong><span style={{color:"#817468",fontSize:10}}>Public shopping</span></div><button className="btn btn-primary" onClick={() => setAuthModal("signup")}>Continue to checkout <ArrowRight size={16}/></button></div>}
+        <div className="product-grid">{filteredProducts.map((product) => <article className="market-product" key={product.id}>{product.image ? <img className="market-product-img" src={product.image} alt={product.name}/> : <div className="market-product-img"><ShoppingBag size={32}/></div>}<div className="market-product-body"><span className="market-kicker">{product.category || "HANDCRAFTED POTTERY"}</span><h3>{product.name}</h3><p>{product.description || "A unique handmade piece crafted with care."}</p><p style={{ margin: "0 0 8px", color: "#806b5e", fontSize: 10 }}>Made by {product.seller_name || "Community artisan"}</p><div className="market-product-bottom"><strong>₹{Number(product.price).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong><button className="btn btn-primary" onClick={() => addToCart(product)}><ShoppingCart size={15}/> Add to cart</button></div>{product.can_manage && <div style={{ display: "flex", gap: 8, marginTop: 10 }}><button type="button" className="btn btn-outline" onClick={() => editProduct(product)}>Edit</button><button type="button" className="btn btn-outline" onClick={() => removeProduct(product)}>Remove</button></div>}</div></article>)}</div>
+      ) : !loadingProducts ? (
+        <div className="market-empty"><div className="market-empty-icon"><ShoppingBag size={34}/></div><span className="market-kicker">THE ARTISAN SHELF</span><h2>{search ? "No matching pottery found" : "Beautiful things are being shaped."}</h2><p>{marketNotice && !products.length ? marketNotice : search ? "Try another keyword or choose All pottery to browse again." : "No pottery has been listed yet. Verified community members can publish the first product."}</p>{search && <button className="btn btn-outline" onClick={() => setSearch("")}>Show all pottery</button>}</div>
+      ) : null}
+      {cart.length > 0 && <div className="market-cart-bar"><div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}><ShoppingCart size={18}/><strong>{cart.length} item(s) · ₹{cart.reduce((sum, item) => sum + Number(item.price || 0), 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong>{cart.map((item, index) => <button type="button" key={`${item.id}-${index}`} onClick={() => removeCartItem(index)} aria-label={`Remove ${item.name} from cart`} style={{ border: 0, background: "transparent", color: "#a95736", cursor: "pointer", fontSize: 10 }}>Remove {item.name}</button>)}</div><div className="market-buyer-fields"><input required placeholder="Your name" value={buyerDetails.name} onChange={(event) => setBuyerDetails({ ...buyerDetails, name: event.target.value })}/><input required type="tel" placeholder="Phone number" value={buyerDetails.phone} onChange={(event) => setBuyerDetails({ ...buyerDetails, phone: event.target.value })}/><input type="email" placeholder="Email (optional)" value={buyerDetails.email} onChange={(event) => setBuyerDetails({ ...buyerDetails, email: event.target.value })}/><input required className="address" placeholder="Full delivery address" value={buyerDetails.address} onChange={(event) => setBuyerDetails({ ...buyerDetails, address: event.target.value })}/></div><button className="btn btn-primary" onClick={placeOrder}>Place order <ArrowRight size={16}/></button><small style={{color:"#786d62"}}>Anyone can order. The artisan will contact you to arrange payment and delivery.</small></div>}
+      {authenticated && orders.length > 0 && <section style={{ marginTop: 24, padding: 16, border: "1px solid #e3d5c7", borderRadius: 16, background: "#fffdf9" }}><h2 style={{ margin: "0 0 10px", fontSize: 16, color: "#503326" }}>{canManage || isApprovedMember ? "Marketplace order requests for your listings" : "Your order requests"}</h2>{orders.map((order) => <div key={order.id} style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", padding: "10px 0", borderTop: "1px solid #efe2d8", fontSize: 12 }}><span>Order #{order.id}{order.buyer_name ? ` · From ${order.buyer_name}` : ""} · {order.items.reduce((count, item) => count + item.quantity, 0)} item(s) · {new Date(order.created_at).toLocaleDateString()}<small style={{ display: "block", color: "#806b5e", marginTop: 4 }}>{order.items.map((item) => `${item.name} × ${item.quantity}`).join(", ")}</small>{order.buyer_phone && <small style={{ display: "block", color: "#806b5e", marginTop: 4 }}>Buyer phone: {order.buyer_phone}{order.buyer_email ? ` · ${order.buyer_email}` : ""} · Delivery: {order.delivery_address}</small>}</span><strong>₹{Number(order.total_amount).toLocaleString("en-IN", { minimumFractionDigits: 2 })} · {order.status}</strong></div>)}</section>}
     </PageWrapper>
   );
 }
@@ -1691,6 +1808,8 @@ function MemberContent({
   setSearch,
   addToCart,
   cart,
+  clearCart,
+  removeCartItem,
 }) {
   const [schemeScope, setSchemeScope] = useState("National");
   const [communityEvents, setCommunityEvents] = useState([]);
@@ -1915,7 +2034,7 @@ function MemberContent({
   }
 
   if (currentPage === "marketplace") {
-    return <MarketplacePage authenticated={true} navigate={navigate} search={search} setSearch={setSearch} addToCart={addToCart} cart={cart} />;
+    return <MarketplacePage authenticated={true} navigate={navigate} search={search} setSearch={setSearch} addToCart={addToCart} cart={cart} clearCart={clearCart} removeCartItem={removeCartItem} activeUser={activeUser} />;
   }
 
   if (currentPage === "matrimonial") {
@@ -2498,6 +2617,7 @@ function MatrimonialCard({
 ========================================================= */
 
 function Dashboard({ navigate, activeRole = "General Member", activeUser = null }) {
+  const [marketplaceProductCount, setMarketplaceProductCount] = useState(0);
   const [profile, setProfile] = useState(() => {
     try {
       return getStoredProfile();
@@ -2521,6 +2641,18 @@ function Dashboard({ navigate, activeRole = "General Member", activeUser = null 
         "potter-profile-updated",
         updateProfile
       );
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    authApi("/marketplace/products")
+      .then((rows) => {
+        if (!cancelled) setMarketplaceProductCount(Array.isArray(rows) ? rows.length : 0);
+      })
+      .catch(() => {
+        if (!cancelled) setMarketplaceProductCount(0);
+      });
+    return () => { cancelled = true; };
   }, []);
 
   const dashboardRole = normalizeCommunityRole(activeRole);
@@ -2622,7 +2754,7 @@ function Dashboard({ navigate, activeRole = "General Member", activeUser = null 
 
         <StatCard
           icon={ShoppingBag}
-          value={products.length}
+          value={marketplaceProductCount}
           label="Marketplace Products"
         />
       </div>
@@ -6385,10 +6517,10 @@ function AuthModal({
       }}
     >
       <div
-        className="auth-modal"
+        className={`auth-modal${mode === "signup" ? " auth-modal-signup" : ""}`}
         style={{
-          width: "min(395px, calc(100vw - 32px))",
-          maxWidth: "395px",
+          width: mode === "signup" ? "min(760px, calc(100vw - 32px))" : "min(395px, calc(100vw - 32px))",
+          maxWidth: mode === "signup" ? "760px" : "395px",
           maxHeight: "calc(100dvh - 32px)",
           overflowY: "auto",
           boxSizing: "border-box",
@@ -6413,7 +6545,7 @@ function AuthModal({
             ? "Welcome Back"
             : "Join Potter Community"}
         </h2>
-        <form onSubmit={submit}>
+        <form onSubmit={submit} className={mode === "signup" ? "auth-form-signup" : ""}>
           {mode === "signup" && (
             <div className="form-group">
               <label>Full Name</label>
@@ -6477,6 +6609,18 @@ function AuthModal({
             </div>
           </div>
 
+          {mode === "signup" && (
+            <div className="form-group">
+              <label>Confirm Password</label>
+              <div className="password-input-wrapper">
+                <input type={showConfirmPassword ? "text" : "password"} name="confirmPassword" autoComplete="new-password" placeholder="Confirm your password" required />
+                <button type="button" className="password-toggle" onClick={() => setShowConfirmPassword(!showConfirmPassword)} aria-label={showConfirmPassword ? "Hide confirm password" : "Show confirm password"}>
+                  {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+            </div>
+          )}
+
           {mode === "signin" && !loginOtpStep && (
             <div style={{ display: "flex", justifyContent: "flex-end", margin: "0 0 8px" }}>
               <button type="button" onClick={() => { setForgotPassword(true); setAuthError(""); setAuthNotice(""); setForgotOtpSent(false); setForgotOtp(""); setForgotChallengeId(""); }} style={{ border: 0, padding: 0, background: "transparent", color: "#a65332", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
@@ -6510,12 +6654,12 @@ function AuthModal({
 
               <div className="form-group">
                 <label>Permanent Address</label>
-                <textarea name="permanentAddress" placeholder="Door no., house/apartment, street, area, city and PIN code" rows={2} required style={{ width: "100%", resize: "vertical", boxSizing: "border-box" }} />
+                <textarea className="signup-address-field" name="permanentAddress" placeholder="House / building, street, village or area, district, state and PIN code" rows={3} autoComplete="street-address" required />
               </div>
 
               <div className="form-group">
                 <label>Correspondence Address</label>
-                <textarea name="correspondenceAddress" placeholder="Enter correspondence address" rows={2} required style={{ width: "100%", resize: "vertical", boxSizing: "border-box" }} />
+                <textarea className="signup-address-field" name="correspondenceAddress" placeholder="Address where you can currently receive letters, including PIN code" rows={3} required />
               </div>
 
               <div className="form-group">
@@ -6534,27 +6678,6 @@ function AuthModal({
               <div className="form-group">
                 <label>Referral Membership No. <span style={{ color: "#806b5e", fontWeight: 400 }}>(Community entry)</span></label>
                 <input type="text" name="referralMembershipId" placeholder="To be entered by the community" readOnly />
-              </div>
-
-              <div className="form-group">
-                <label>Confirm Password</label>
-                <div className="password-input-wrapper">
-                  <input
-                    type={showConfirmPassword ? "text" : "password"}
-                    name="confirmPassword"
-                    autoComplete="new-password"
-                    placeholder="Confirm your password"
-                    required
-                  />
-                  <button
-                    type="button"
-                    className="password-toggle"
-                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                    aria-label={showConfirmPassword ? "Hide confirm password" : "Show confirm password"}
-                  >
-                    {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                  </button>
-                </div>
               </div>
 
               <div
