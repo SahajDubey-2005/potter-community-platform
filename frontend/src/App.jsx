@@ -3,6 +3,7 @@ import { QRCodeSVG } from "qrcode.react";
 import {
   Home,
   Users,
+  Mail,
   Bell,
   CalendarDays,
   FileText,
@@ -420,12 +421,12 @@ const ROLE_DASHBOARD_CONFIG = {
   "Super Admin": {
     title: "Super Admin Dashboard",
     description: "Community-wide oversight and administration.",
-    actions: [{ label: "Members", page: "members" }, { label: "Committee & Roles", page: "committee-roles" }, { label: "Payments & Fees", page: "payments" }, { label: "Events", page: "events" }, { label: "Announcements", page: "announcements" }, { label: "Official records", page: "community-records" }],
+    actions: [{ label: "Members", page: "members" }, { label: "Committee & Roles", page: "committee-roles" }, { label: "Help & Support", page: "support-inquiries" }, { label: "Payments & Fees", page: "payments" }, { label: "Events", page: "events" }, { label: "Announcements", page: "announcements" }, { label: "Official records", page: "community-records" }],
   },
   "Admin": {
     title: "Admin Dashboard",
     description: "Manage community operations and member services.",
-    actions: [{ label: "Members", page: "members" }, { label: "Committee & Roles", page: "committee-roles" }, { label: "Announcements", page: "announcements" }, { label: "Events", page: "events" }, { label: "Documents", page: "documents" }, { label: "Official records", page: "community-records" }],
+    actions: [{ label: "Members", page: "members" }, { label: "Committee & Roles", page: "committee-roles" }, { label: "Help & Support", page: "support-inquiries" }, { label: "Announcements", page: "announcements" }, { label: "Events", page: "events" }, { label: "Documents", page: "documents" }, { label: "Official records", page: "community-records" }],
   },
   "President / Head": {
     title: "President Dashboard",
@@ -1785,6 +1786,43 @@ function MarketplacePage({ authenticated, navigate, search, setSearch, addToCart
    MEMBER CONTENT
 ========================================================= */
 
+function SupportInquiriesPage() {
+  const [inquiries, setInquiries] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState(null);
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const load = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const rows = await authApi("/support/inquiries");
+      setInquiries(Array.isArray(rows) ? rows : []);
+    } catch (loadError) { setError(loadError.message || "Could not load enquiries."); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+  const setStatus = async (item, status) => {
+    setBusyId(item.id); setNotice(""); setError("");
+    try {
+      await authApi(`/support/inquiries/${item.id}`, { method: "PATCH", body: JSON.stringify({ status }) });
+      setNotice(`Enquiry #${item.id} updated.`);
+      await load();
+    } catch (updateError) { setError(updateError.message || "Could not update enquiry."); }
+    finally { setBusyId(null); }
+  };
+  return <PageWrapper><PageHeader title="Help & Support enquiries" description="Questions sent by anyone from the public sign-in or sign-up screens." />
+    <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}><button type="button" className="btn btn-outline" onClick={load} disabled={loading}>Refresh</button></div>
+    {notice && <p role="status" style={{ color: "#216b35" }}>{notice}</p>}{error && <p role="alert" style={{ color: "#a1261c" }}>{error}</p>}
+    {loading ? <p>Loading enquiries…</p> : inquiries.length === 0 ? <div className="empty-state"><h3>No support enquiries yet</h3><p>New messages from the public Help & Support form will appear here.</p></div> :
+      <div style={{ display: "grid", gap: 12 }}>{inquiries.map((item) => <article key={item.id} style={{ padding: 18, background: "#fff", border: "1px solid #ead8ca", borderRadius: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}><strong>{item.full_name} · {item.category}</strong><span>{item.status} · {new Date(item.created_at).toLocaleString()}</span></div>
+        <p style={{ whiteSpace: "pre-wrap" }}>{item.message}</p><p style={{ color: "#806b5e" }}>Contact: {item.email || "No email"}{item.phone_number ? ` · ${item.phone_number}` : ""}</p>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}><button className="btn btn-outline" type="button" disabled={busyId === item.id || item.status === "IN_PROGRESS"} onClick={() => setStatus(item, "IN_PROGRESS")}>Mark in progress</button><button className="btn btn-primary" type="button" disabled={busyId === item.id || item.status === "RESOLVED"} onClick={() => setStatus(item, "RESOLVED")}>Mark resolved</button></div>
+      </article>)}</div>}
+  </PageWrapper>;
+}
+
 function MemberContent({
   currentPage,
   navigate,
@@ -1898,6 +1936,10 @@ function MemberContent({
 
   if (currentPage === "dashboard") {
     return <Dashboard navigate={navigate} activeRole={activeRole} activeUser={activeUser} />;
+  }
+
+  if (currentPage === "support-inquiries") {
+    return <SupportInquiriesPage />;
   }
 
   if (currentPage === "announcements") {
@@ -2213,6 +2255,10 @@ function MemberContent({
     return <DocumentsPage />;
   }
 
+  if (currentPage === "committee-directory") {
+    return <CommitteeDirectoryPage activeUser={activeUser} />;
+  }
+
   if (currentPage === "widow-assistance") {
     return <WidowAssistancePage activeUser={activeUser} />;
   }
@@ -2241,7 +2287,7 @@ function MemberContent({
     return <SettingsPage activeUser={activeUser} committeeOnly />;
   }
 
-  return <Dashboard navigate={navigate} />;
+  return <Dashboard navigate={navigate} activeUser={activeUser} />;
 }
 
 /* =========================================================
@@ -2616,6 +2662,182 @@ function MatrimonialCard({
    DASHBOARD
 ========================================================= */
 
+function CommitteeDirectoryPage({ activeUser }) {
+  const [committee, setCommittee] = useState([]);
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const approved = String(activeUser?.membership_status || "").toUpperCase() === "APPROVED";
+
+  const loadCommittee = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const rows = await authApi("/admin/roles/directory");
+      setCommittee(Array.isArray(rows) ? rows : []);
+    } catch (loadError) {
+      setError(loadError.message || "Could not load the committee directory.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (approved) loadCommittee();
+  }, [approved]);
+
+  if (!approved) {
+    return <PageWrapper><PageHeader title="Committee Directory" description="This directory is available to approved members." /></PageWrapper>;
+  }
+
+  const visibleCommittee = committee.filter((member) =>
+    `${member.name} ${member.designation} ${member.email || ""}`.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <PageWrapper>
+      <PageHeader title="Committee Directory" description="Find current committee members, their designations, and community contact emails." />
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", margin: "18px 0" }}>
+        <div className="search-box" style={{ flex: "1 1 280px" }}><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search by name, designation, or email" aria-label="Search committee members" /></div>
+        <button type="button" className="btn btn-outline" onClick={loadCommittee} disabled={loading}>{loading ? "Refreshing…" : "Refresh"}</button>
+      </div>
+      {error && <p role="alert" style={{ color: "#a13d2d", fontSize: 12 }}>{error}</p>}
+      {loading ? <div className="empty-state">Loading committee directory…</div> : visibleCommittee.length ? (
+        <div className="content-grid">
+          {visibleCommittee.map((member) => <article key={`${member.member_id}-${member.designation}`} style={{ display: "flex", gap: 13, alignItems: "center", minWidth: 0, padding: 16, border: "1px solid #ead8c9", borderRadius: 13, background: "#fffdf9" }}>
+            <div style={{ display: "grid", placeItems: "center", width: 48, height: 48, flex: "0 0 auto", borderRadius: 16, background: "#f3e2d5", color: "#9e5237", fontWeight: 850 }}>{member.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}</div>
+            <div style={{ minWidth: 0 }}>
+              <h2 style={{ margin: "0 0 4px", color: "#503326", fontSize: 15 }}>{member.name}</h2>
+              <div style={{ color: "#a65335", fontSize: 12, fontWeight: 750 }}>{member.designation}</div>
+              {member.email ? <a href={`mailto:${member.email}`} style={{ display: "inline-flex", alignItems: "center", gap: 6, marginTop: 7, color: "#786457", fontSize: 12, overflowWrap: "anywhere" }}><Mail size={14} />{member.email}</a> : <span style={{ display: "block", marginTop: 7, color: "#806b5e", fontSize: 11 }}>No email address on file</span>}
+              {(member.term_start || member.term_end) && <small style={{ display: "block", marginTop: 6, color: "#806b5e" }}>Term: {member.term_start || "—"} to {member.term_end || "—"}</small>}
+            </div>
+          </article>)}
+        </div>
+      ) : <EmptyState title={search ? "No committee members match" : "No active committee members listed"} description={search ? "Try another name or designation." : "Current committee assignments will appear here."} />}
+    </PageWrapper>
+  );
+}
+
+function MyCommitteeElectionProof() {
+  const [assignments, setAssignments] = useState([]);
+  const [files, setFiles] = useState({});
+  const [titles, setTitles] = useState({});
+  const [busyId, setBusyId] = useState(null);
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+
+  const loadAssignments = async () => {
+    try {
+      const rows = await authApi("/admin/roles/my-assignments");
+      setAssignments(Array.isArray(rows) ? rows : []);
+    } catch (loadError) {
+      setError(loadError.message || "Could not load committee assignments.");
+    }
+  };
+
+  useEffect(() => { loadAssignments(); }, []);
+
+  const uploadProof = async (event, assignment) => {
+    event.preventDefault();
+    const file = files[assignment.id];
+    if (!file) {
+      setError("Choose your election result or certificate file first.");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setError("Election proof files must be 5 MB or smaller.");
+      return;
+    }
+    const formData = new FormData();
+    formData.append("title", (titles[assignment.id] || "").trim() || "Election result proof");
+    formData.append("file", file);
+    setBusyId(assignment.id);
+    setError("");
+    setNotice("");
+    try {
+      await authApi(`/admin/roles/assignments/${assignment.id}/election-documents`, { method: "POST", body: formData });
+      setNotice(`Your election proof for ${assignment.role} was submitted.`);
+      setFiles((previous) => ({ ...previous, [assignment.id]: null }));
+      setTitles((previous) => ({ ...previous, [assignment.id]: "" }));
+      await loadAssignments();
+    } catch (uploadError) {
+      setError(uploadError.message || "Could not submit the election proof.");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const openProof = async (proof) => {
+    const token = sessionStorage.getItem("potterCommunityAccessToken") || localStorage.getItem("token");
+    const preview = window.open("", "_blank");
+    try {
+      const response = await fetch(`${AUTH_API_BASE}${proof.file_url}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      if (!response.ok) throw new Error("Could not open this document.");
+      const objectUrl = URL.createObjectURL(await response.blob());
+      if (preview) {
+        preview.opener = null;
+        preview.location.href = objectUrl;
+      } else {
+        const link = document.createElement("a");
+        link.href = objectUrl;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.click();
+      }
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    } catch (openError) {
+      preview?.close();
+      setError(openError.message || "Could not open this document.");
+    }
+  };
+
+  const removeProof = async (assignment, proof) => {
+    if (!window.confirm(`Remove your document “${proof.title}”?`)) return;
+    setError("");
+    setNotice("");
+    try {
+      await authApi(`/admin/roles/assignments/${assignment.id}/election-documents/${proof.id}`, { method: "DELETE" });
+      setNotice("Election proof removed.");
+      await loadAssignments();
+    } catch (removeError) {
+      setError(removeError.message || "Could not remove the document.");
+    }
+  };
+
+  if (!assignments.length && !error) return null;
+
+  return (
+    <section style={{ margin: "0 0 22px", padding: 18, border: "1px solid #ead8c9", borderRadius: 14, background: "#fffdf9" }}>
+      <span style={{ color: "#a65335", fontSize: 10, fontWeight: 900, letterSpacing: ".12em" }}>YOUR COMMITTEE ROLE</span>
+      <h2 style={{ margin: "5px 0 7px", color: "#503326", fontSize: 19 }}>Submit election proof</h2>
+      <p style={{ margin: "0 0 13px", color: "#806b5e", fontSize: 12, lineHeight: 1.6 }}>Upload the official election result, certificate, or signed meeting record for your committee appointment. Your proof is stored privately and can be reviewed by authorized role managers.</p>
+      {error && <p role="alert" style={{ color: "#a13d2d", fontSize: 12 }}>{error}</p>}
+      {notice && <p role="status" style={{ color: "#39734a", fontSize: 12 }}>{notice}</p>}
+      <div style={{ display: "grid", gap: 11 }}>
+        {assignments.map((assignment) => <article key={assignment.id} style={{ padding: 12, border: "1px solid #efe2d8", borderRadius: 10, background: "#fff" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+            <strong style={{ color: "#503326", fontSize: 13 }}>{assignment.role}</strong>
+            <span style={{ color: "#806b5e", fontSize: 11 }}>{assignment.term_start || "Start not set"} → {assignment.term_end || "End not set"} · {assignment.status}</span>
+          </div>
+          {assignment.election_documents?.length > 0 && <div style={{ display: "grid", gap: 7, marginBottom: 10 }}>
+            {assignment.election_documents.map((proof) => <div key={proof.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 9, flexWrap: "wrap", padding: 9, border: "1px solid #f0e2d8", borderRadius: 8, background: "#fffaf6" }}>
+              <span style={{ color: "#624b3d", fontSize: 11 }}>{proof.title} · {proof.original_filename}<small style={{ display: "block", marginTop: 3, color: "#806b5e" }}>Submitted {new Date(proof.created_at).toLocaleString()}</small></span>
+              <div style={{ display: "flex", gap: 7 }}><button type="button" className="btn btn-outline" onClick={() => openProof(proof)}>View</button><button type="button" className="btn btn-outline" onClick={() => removeProof(assignment, proof)}>Remove</button></div>
+            </div>)}
+          </div>}
+          <form onSubmit={(event) => uploadProof(event, assignment)} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 8, alignItems: "center" }}>
+            <input aria-label={`Document title for ${assignment.role}`} value={titles[assignment.id] || ""} onChange={(event) => setTitles((previous) => ({ ...previous, [assignment.id]: event.target.value }))} placeholder="Document title (optional)" maxLength={160} style={{ minWidth: 0, padding: 9, border: "1px solid #ddc9b7", borderRadius: 8 }} />
+            <input aria-label={`Election proof file for ${assignment.role}`} type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" onChange={(event) => setFiles((previous) => ({ ...previous, [assignment.id]: event.target.files?.[0] || null }))} style={{ minWidth: 0, color: "#624b3d", fontSize: 11 }} />
+            <button type="submit" className="btn btn-primary" disabled={busyId === assignment.id}>{busyId === assignment.id ? "Submitting…" : "Submit proof"}</button>
+            {files[assignment.id] && <small style={{ gridColumn: "1 / -1", color: "#806b5e" }}>{files[assignment.id].name} · PDF, JPG, or PNG · Max 5 MB</small>}
+          </form>
+        </article>)}
+      </div>
+    </section>
+  );
+}
+
 function Dashboard({ navigate, activeRole = "General Member", activeUser = null }) {
   const [marketplaceProductCount, setMarketplaceProductCount] = useState(0);
   const [profile, setProfile] = useState(() => {
@@ -2668,6 +2890,7 @@ function Dashboard({ navigate, activeRole = "General Member", activeUser = null 
       ["scholarships.review", { label: "Scholarships", page: "scholarships" }],
       ["matrimonial.review", { label: "Matrimonial", page: "matrimonial" }],
       ["roles.manage", { label: "Committee & Roles", page: "committee-roles" }],
+      ["membership.review", { label: "Help & Support", page: "support-inquiries" }],
     ].filter(([permission]) => activeUser?.permissions?.includes(permission)).map(([, action]) => action);
     return {
       title: `${dashboardRole} Dashboard`,
@@ -2682,6 +2905,12 @@ function Dashboard({ navigate, activeRole = "General Member", activeUser = null 
     profile.membershipStatus ??
     "PENDING"
   ).toUpperCase();
+  const canReviewEnquiries = ["ADMIN", "SUPER ADMIN"].includes(String(activeUser?.role || "").toUpperCase()) || activeUser?.permissions?.includes("membership.review");
+  const dashboardActions = [
+    ...dashboardConfig.actions,
+    ...(membershipStatus === "APPROVED" ? [{ label: "Committee Directory", page: "committee-directory" }] : []),
+    ...(canReviewEnquiries ? [{ label: "Help & Support", page: "support-inquiries" }] : []),
+  ].filter((action, index, actions) => actions.findIndex((item) => item.page === action.page) === index);
 
   const displayName =
     activeUser?.full_name ||
@@ -2721,7 +2950,7 @@ function Dashboard({ navigate, activeRole = "General Member", activeUser = null 
       </div>
 
       <div className="role-dashboard-actions" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(175px, 1fr))", gap: 12, margin: "0 0 22px" }}>
-        {dashboardConfig.actions.map((action) => (
+        {dashboardActions.map((action) => (
           <button
             key={`${dashboardRole}-${action.page}`}
             type="button"
@@ -2732,6 +2961,8 @@ function Dashboard({ navigate, activeRole = "General Member", activeUser = null 
           </button>
         ))}
       </div>
+
+      <MyCommitteeElectionProof />
 
       <div className="dashboard-stats">
         <StatCard
@@ -5557,11 +5788,11 @@ function FamilyMembersPanel() {
 
   const addFamilyMember = async (event) => {
     event.preventDefault();
-    const form = event.currentTarget;
     setBusy(true);
     setError("");
     setNotice("");
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     const values = Object.fromEntries(formData.entries());
     for (const key of Object.keys(values)) if (values[key] === "") values[key] = null;
     try {
@@ -5920,6 +6151,43 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
     }
   };
 
+  const openElectionProof = async (proofDoc) => {
+    const token = sessionStorage.getItem("potterCommunityAccessToken") || localStorage.getItem("token");
+    const preview = window.open("", "_blank");
+    try {
+      const response = await fetch(`${AUTH_API_BASE}${proofDoc.file_url}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      if (!response.ok) throw new Error("Could not open this election proof document.");
+      const objectUrl = URL.createObjectURL(await response.blob());
+      if (preview) {
+        preview.opener = null;
+        preview.location.href = objectUrl;
+      } else {
+        const link = document.createElement("a");
+        link.href = objectUrl;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.click();
+      }
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    } catch (error) {
+      preview?.close();
+      setRoleError(error.message || "Could not open this election proof document.");
+    }
+  };
+
+  const deleteElectionProof = async (assignment, document) => {
+    if (!window.confirm(`Remove “${document.title}” for ${assignment.member_name}?`)) return;
+    setRoleError("");
+    setRoleNotice("");
+    try {
+      await authApi(`/admin/roles/assignments/${assignment.id}/election-documents/${document.id}`, { method: "DELETE" });
+      setRoleNotice("Election proof document removed.");
+      await loadRoleManagement();
+    } catch (error) {
+      setRoleError(error.message || "Could not remove the election proof document.");
+    }
+  };
+
   const revokeRole = async (user) => {
     const reason = window.prompt(`Reason for removing ${user.full_name} from the committee? Their member account will remain active.`);
     if (!reason || reason.trim().length < 3) return;
@@ -6038,8 +6306,17 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
         {roleUsers.length ? <div style={{ display: "grid", gap: 8 }}>{roleUsers.map((user) => <div key={user.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: 11, border: "1px solid #efe2d8", borderRadius: 9 }}><div><strong style={{ color: "#503326", fontSize: 13 }}>{user.full_name}</strong><div style={{ color: "#806b5e", fontSize: 11 }}>{user.membership_number || user.email || `Member #${user.id}`} · Current role: {user.role}</div></div><div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}><select aria-label={`Assign role to ${user.full_name}`} value="" onChange={(event) => assignRole(user.id, event.target.value)} style={{ minWidth: 220, padding: 9, border: "1px solid #ddc9b7", borderRadius: 8, background: "#fffdfb", color: "#503326" }}><option value="" disabled>Assign committee role…</option>{roles.filter((role) => role.is_active && role.name.toUpperCase() !== "ADMIN").map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select>{user.role_id && !["CITIZEN", "ADMIN", "SUPER ADMIN"].includes(user.role.toUpperCase()) && <button type="button" className="btn btn-outline" onClick={() => revokeRole(user)}>Remove from committee</button>}{canCreateAdmins && !["ADMIN", "SUPER ADMIN"].includes(user.role.toUpperCase()) && <button type="button" className="btn btn-outline" onClick={() => deleteMemberAccount(user)}>Delete member account</button>}</div></div>)}</div> : <p style={{ color: "#806b5e", fontSize: 12 }}>No approved active members are available for role assignment.</p>}
 
         <details style={{ marginTop: 16, padding: 10, border: "1px solid #f0e2d8", borderRadius: 9 }}>
-        <summary style={{ color: "#624b3d", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Committee term and handover history</summary>
-        {roleAssignments.length ? <div style={{ display: "grid", gap: 7 }}>{roleAssignments.map((assignment) => <div key={assignment.id} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 8, padding: 10, border: "1px solid #efe2d8", borderRadius: 8, color: "#624b3d", fontSize: 11 }}><strong>{assignment.member_name} · {assignment.role}</strong><span>{assignment.status}</span><span>{assignment.term_start || "Start not set"} → {assignment.term_end || "End not set"}</span><span>{assignment.minutes_reference || "No minutes reference"}</span><span>{assignment.end_reason || `Assigned ${new Date(assignment.assigned_at).toLocaleString()}`}</span></div>)}</div> : <p style={{ color: "#806b5e", fontSize: 12 }}>New assignments and handovers will be recorded here.</p>}
+        <summary style={{ color: "#624b3d", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Committee terms, election proof & handover history</summary>
+        {roleAssignments.length ? <div style={{ display: "grid", gap: 9, marginTop: 10 }}>{roleAssignments.map((assignment) => <article key={assignment.id} style={{ display: "grid", gap: 9, padding: 12, border: "1px solid #efe2d8", borderRadius: 9, color: "#624b3d", fontSize: 11 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(145px,1fr))", gap: 8 }}>
+            <strong>{assignment.member_name} · {assignment.role}</strong><span>Status: {assignment.status}</span><span>{assignment.term_start || "Start not set"} → {assignment.term_end || "End not set"}</span><span>{assignment.minutes_reference || "No minutes reference"}</span><span>{assignment.end_reason || `Assigned ${new Date(assignment.assigned_at).toLocaleString()}`}</span>
+          </div>
+          <div style={{ padding: 10, border: "1px solid #f0e2d8", borderRadius: 8, background: "#fffaf6" }}>
+            <strong style={{ display: "block", marginBottom: 7, color: "#503326" }}>Election result proof</strong>
+            {assignment.election_documents?.length ? <div style={{ display: "grid", gap: 6, marginBottom: 9 }}>{assignment.election_documents.map((proofDoc) => <div key={proofDoc.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 9, flexWrap: "wrap" }}><span>{proofDoc.title} · {proofDoc.original_filename}<small style={{ display: "block", color: "#806b5e", marginTop: 2 }}>Added {new Date(proofDoc.created_at).toLocaleString()}</small></span><div style={{ display: "flex", gap: 7 }}><button type="button" className="btn btn-outline" onClick={() => openElectionProof(proofDoc)}>View</button><button type="button" className="btn btn-outline" onClick={() => deleteElectionProof(assignment, proofDoc)}>Remove</button></div></div>)}</div> : <p style={{ margin: "0 0 8px", color: "#806b5e" }}>No election proof document uploaded for this assignment yet.</p>}
+            <p style={{ margin: "6px 0 0", color: "#806b5e" }}>The assigned member uploads their own election proof from their dashboard.</p>
+          </div>
+        </article>)}</div> : <p style={{ color: "#806b5e", fontSize: 12 }}>New assignments and handovers will be recorded here.</p>}
         </details>
       </section>}
 
@@ -6120,6 +6397,10 @@ function AuthModal({
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authNotice, setAuthNotice] = useState("");
+  const [showSupport, setShowSupport] = useState(false);
+  const [supportBusy, setSupportBusy] = useState(false);
+  const [supportError, setSupportError] = useState("");
+  const [supportNotice, setSupportNotice] = useState("");
   const [forgotPassword, setForgotPassword] = useState(false);
   const [forgotPhone, setForgotPhone] = useState("");
   const [forgotOtp, setForgotOtp] = useState("");
@@ -6454,6 +6735,29 @@ function AuthModal({
     } finally { setAuthBusy(false); }
   };
 
+  const submitSupportInquiry = async (event) => {
+    event.preventDefault();
+    setSupportError(""); setSupportNotice("");
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    setSupportBusy(true);
+    try {
+      const result = await authApi("/support/inquiries", {
+        method: "POST",
+        body: JSON.stringify({
+          full_name: String(formData.get("supportName") || "").trim(),
+          email: String(formData.get("supportEmail") || "").trim() || null,
+          phone_number: String(formData.get("supportPhone") || "").trim() || null,
+          category: String(formData.get("supportCategory") || "Other"),
+          message: String(formData.get("supportMessage") || "").trim(),
+        }),
+      });
+      setSupportNotice(result.message || "Your enquiry has been received.");
+      form.reset();
+    } catch (error) { setSupportError(error.message || "Could not submit your enquiry. Please try again."); }
+    finally { setSupportBusy(false); }
+  };
+
   if (forgotPassword) {
     return (
       <div className="modal-overlay" style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: 16, boxSizing: "border-box", overflowY: "auto", zIndex: 9999 }}>
@@ -6519,8 +6823,8 @@ function AuthModal({
       <div
         className={`auth-modal${mode === "signup" ? " auth-modal-signup" : ""}`}
         style={{
-          width: mode === "signup" ? "min(760px, calc(100vw - 32px))" : "min(395px, calc(100vw - 32px))",
-          maxWidth: mode === "signup" ? "760px" : "395px",
+          width: mode === "signup" ? "min(760px, calc(100vw - 32px))" : showSupport ? "min(560px, calc(100vw - 32px))" : "min(395px, calc(100vw - 32px))",
+          maxWidth: mode === "signup" ? "760px" : showSupport ? "560px" : "395px",
           maxHeight: "calc(100dvh - 32px)",
           overflowY: "auto",
           boxSizing: "border-box",
@@ -6540,11 +6844,22 @@ function AuthModal({
           <span>🏺</span>
         </div>
 
-        <h2>
-          {mode === "signin"
-            ? "Welcome Back"
-            : "Join Potter Community"}
-        </h2>
+        <h2>{showSupport ? "Help & Support" : mode === "signin" ? "Welcome Back" : "Join Potter Community"}</h2>
+        {showSupport ? (
+          <>
+            <p style={{ color: "#806b5e", fontSize: 13, lineHeight: 1.55, margin: "0 0 16px" }}>Anyone can contact the Potter Community team. Tell us what information or help you need.</p>
+            {supportNotice ? <div role="status" style={{ padding: 14, borderRadius: 10, background: "#f0faf2", color: "#216b35", fontSize: 13, lineHeight: 1.5 }}>{supportNotice}</div> : <form onSubmit={submitSupportInquiry} style={{ display: "grid", gap: 12 }}>
+              <div className="form-group"><label htmlFor="support-name">Your name</label><input id="support-name" name="supportName" autoComplete="name" required minLength={2} maxLength={160} placeholder="Enter your name" /></div>
+              <div className="form-group"><label htmlFor="support-email">Email address <span style={{ color: "#806b5e", fontWeight: 400 }}>(or phone number)</span></label><input id="support-email" name="supportEmail" type="email" autoComplete="email" placeholder="you@example.com" /></div>
+              <div className="form-group"><label htmlFor="support-phone">Phone number</label><input id="support-phone" name="supportPhone" type="tel" autoComplete="tel" placeholder="Optional if you provided email" maxLength={20} /></div>
+              <div className="form-group"><label htmlFor="support-category">What do you need help with?</label><select id="support-category" name="supportCategory" defaultValue="Signup and membership"><option>Signup and membership</option><option>OTP or sign-in</option><option>Documents</option><option>Community information</option><option>Marketplace</option><option>Other</option></select></div>
+              <div className="form-group"><label htmlFor="support-message">Your question</label><textarea id="support-message" name="supportMessage" rows={4} required minLength={10} maxLength={3000} placeholder="Describe the information or help you need" /></div>
+              {supportError && <div role="alert" style={{ padding: 10, borderRadius: 9, background: "#fff1f0", color: "#b42318", fontSize: 12 }}>{supportError}</div>}
+              <button type="submit" className="auth-submit" disabled={supportBusy}>{supportBusy ? "Sending…" : "Send enquiry"} {!supportBusy && <ArrowRight size={17} />}</button>
+            </form>}
+            <div className="auth-switch" style={{ marginTop: 16 }}> <button type="button" onClick={() => { setShowSupport(false); setSupportError(""); setSupportNotice(""); }}>Back to {mode === "signup" ? "Sign Up" : "Sign In"}</button></div>
+          </>
+        ) : <>
         <form onSubmit={submit} className={mode === "signup" ? "auth-form-signup" : ""}>
           {mode === "signup" && (
             <div className="form-group">
@@ -6832,6 +7147,8 @@ function AuthModal({
             </>
           )}
         </div>
+        <div style={{ marginTop: 12, textAlign: "center" }}><button type="button" onClick={() => { setShowSupport(true); setSupportError(""); setSupportNotice(""); }} style={{ border: 0, background: "transparent", color: "#a65332", fontWeight: 700, cursor: "pointer", padding: 6 }}>Help & Support · Ask a question</button></div>
+        </>}
       </div>
     </div>
   );

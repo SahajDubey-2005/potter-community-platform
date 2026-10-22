@@ -1,12 +1,13 @@
 from datetime import date, datetime, timezone
 import re
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_user, get_password_hash, require_permission
+from app.auth import get_current_user, get_password_hash, require_permission, user_has_any_permission
 from app.database import get_db
 from app.models import (
     ActivityLog,
@@ -14,6 +15,7 @@ from app.models import (
     AssistanceBenefit,
     AssistanceDocument,
     CommitteeAssignment,
+    CommitteeElectionDocument,
     CommunityEvent,
     CommunityRecord,
     EventRegistration,
@@ -32,7 +34,7 @@ from app.models import (
     User,
     Verification,
 )
-from app.private_documents import private_document_path
+from app.private_documents import private_document_path, save_private_document
 
 
 router = APIRouter(prefix="/admin/roles", tags=["Role management"])
@@ -414,6 +416,10 @@ def delete_member_account(
     document_names.update(row.file_name for row in assistance_documents if row.file_name)
     assistance_benefits = db.query(AssistanceBenefit).filter(AssistanceBenefit.application_id.in_(assistance_application_ids)).all() if assistance_application_ids else []
     document_names.update(row.proof_file_name for row in assistance_benefits if row.proof_file_name)
+    election_documents = db.query(CommitteeElectionDocument).join(
+        CommitteeAssignment, CommitteeAssignment.id == CommitteeElectionDocument.assignment_id
+    ).filter(CommitteeAssignment.user_id == user_id).all()
+    document_names.update(row.file_name for row in election_documents if row.file_name)
 
     try:
         # Preserve the audit trail while detaching references to the deleted user.
@@ -431,6 +437,8 @@ def delete_member_account(
         db.query(PasswordResetToken).filter(PasswordResetToken.user_id == user_id).delete(synchronize_session=False)
         db.query(Notification).filter(Notification.user_id == user_id).delete(synchronize_session=False)
         db.query(FamilyMember).filter(FamilyMember.primary_user_id == user_id).delete(synchronize_session=False)
+        if election_documents:
+            db.query(CommitteeElectionDocument).filter(CommitteeElectionDocument.id.in_([row.id for row in election_documents])).delete(synchronize_session=False)
         db.query(CommitteeAssignment).filter(CommitteeAssignment.user_id == user_id).delete(synchronize_session=False)
         db.query(EventRegistration).filter(EventRegistration.user_id == user_id).delete(synchronize_session=False)
         db.query(MatrimonialProfile).filter(MatrimonialProfile.user_id == user_id).delete(synchronize_session=False)
@@ -474,6 +482,18 @@ def list_assignments(
         .limit(500)
         .all()
     )
+    return serialize_assignments(rows, db)
+
+
+def serialize_assignments(rows, db: Session):
+    assignment_ids = [assignment.id for assignment, _, _ in rows]
+    documents = db.query(CommitteeElectionDocument).filter(
+        CommitteeElectionDocument.assignment_id.in_(assignment_ids)
+    ).order_by(CommitteeElectionDocument.created_at.desc()).all() if assignment_ids else []
+    documents_by_assignment: dict[int, list[CommitteeElectionDocument]] = {}
+    for document in documents:
+        documents_by_assignment.setdefault(document.assignment_id, []).append(document)
+
     return [{
         "id": assignment.id,
         "user_id": assignment.user_id,
@@ -485,10 +505,157 @@ def list_assignments(
         "term_end": assignment.term_end.isoformat() if assignment.term_end else None,
         "minutes_reference": assignment.minutes_reference,
         "assignment_note": assignment.assignment_note,
+        "election_documents": [{
+            "id": document.id,
+            "title": document.title,
+            "original_filename": document.original_filename,
+            "created_at": document.created_at.isoformat(),
+            "file_url": f"/admin/roles/assignments/{assignment.id}/election-documents/{document.id}/file",
+        } for document in documents_by_assignment.get(assignment.id, [])],
         "assigned_at": assignment.assigned_at.isoformat(),
         "ended_at": assignment.ended_at.isoformat() if assignment.ended_at else None,
         "end_reason": assignment.end_reason,
     } for assignment, full_name, role_name in rows]
+
+
+@router.get("/my-assignments")
+def list_my_committee_assignments(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(CommitteeAssignment, User.full_name, Role.name)
+        .join(User, User.id == CommitteeAssignment.user_id)
+        .join(Role, Role.id == CommitteeAssignment.role_id)
+        .filter(CommitteeAssignment.user_id == current_user.id)
+        .order_by(CommitteeAssignment.assigned_at.desc(), CommitteeAssignment.id.desc())
+        .all()
+    )
+    return serialize_assignments(rows, db)
+
+
+@router.get("/directory")
+def committee_directory(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.membership_status != "APPROVED" or not current_user.is_active:
+        raise HTTPException(status_code=403, detail="Committee directory is available to approved members")
+    rows = (
+        db.query(CommitteeAssignment, User, Role.name)
+        .join(User, User.id == CommitteeAssignment.user_id)
+        .join(Role, Role.id == CommitteeAssignment.role_id)
+        .filter(
+            CommitteeAssignment.status == "ACTIVE",
+            User.membership_status == "APPROVED",
+            User.is_active.is_(True),
+        )
+        .order_by(Role.name.asc(), User.full_name.asc(), CommitteeAssignment.assigned_at.desc())
+        .all()
+    )
+    seen_user_ids: set[int] = set()
+    entries = []
+    for assignment, member, role_name in rows:
+        if member.id in seen_user_ids:
+            continue
+        seen_user_ids.add(member.id)
+        entries.append({
+            "member_id": member.id,
+            "name": member.full_name,
+            "designation": role_name,
+            "email": member.email,
+            "term_start": assignment.term_start.isoformat() if assignment.term_start else None,
+            "term_end": assignment.term_end.isoformat() if assignment.term_end else None,
+        })
+    return entries
+
+
+@router.post("/assignments/{assignment_id}/election-documents", status_code=status.HTTP_201_CREATED)
+def upload_election_document(
+    assignment_id: int,
+    title: str = Form(..., min_length=3, max_length=160),
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    assignment = db.query(CommitteeAssignment).filter(CommitteeAssignment.id == assignment_id).first()
+    if assignment is None:
+        raise HTTPException(status_code=404, detail="Committee assignment not found")
+    if assignment.user_id != current_user.id and not user_has_any_permission(current_user, ("roles.manage",), db):
+        raise HTTPException(status_code=403, detail="Only the assigned member or a role manager can add election proof")
+    original_filename = (file.filename or "Election proof").strip()[:255]
+    stored_name = save_private_document(file)
+    document = CommitteeElectionDocument(
+        assignment_id=assignment.id,
+        uploaded_by_id=current_user.id,
+        title=title.strip(),
+        original_filename=original_filename,
+        file_name=stored_name,
+        created_at=datetime.now(timezone.utc),
+    )
+    try:
+        db.add(document)
+        db.commit()
+        db.refresh(document)
+    except Exception:
+        db.rollback()
+        private_document_path(stored_name).unlink(missing_ok=True)
+        raise
+    return {
+        "id": document.id,
+        "title": document.title,
+        "original_filename": document.original_filename,
+        "created_at": document.created_at.isoformat(),
+    }
+
+
+@router.get("/assignments/{assignment_id}/election-documents/{document_id}/file")
+def view_election_document(
+    assignment_id: int,
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    document = db.query(CommitteeElectionDocument).filter(
+        CommitteeElectionDocument.id == document_id,
+        CommitteeElectionDocument.assignment_id == assignment_id,
+    ).first()
+    if document is None:
+        raise HTTPException(status_code=404, detail="Election proof document not found")
+    assignment = db.query(CommitteeAssignment).filter(CommitteeAssignment.id == assignment_id).first()
+    if assignment is None or (assignment.user_id != current_user.id and not user_has_any_permission(current_user, ("roles.manage",), db)):
+        raise HTTPException(status_code=403, detail="You cannot access this election proof")
+    path = private_document_path(document.file_name)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Election proof file is unavailable")
+    return FileResponse(
+        path,
+        filename=document.original_filename,
+        content_disposition_type="inline",
+    )
+
+
+@router.delete("/assignments/{assignment_id}/election-documents/{document_id}")
+def delete_election_document(
+    assignment_id: int,
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    document = db.query(CommitteeElectionDocument).filter(
+        CommitteeElectionDocument.id == document_id,
+        CommitteeElectionDocument.assignment_id == assignment_id,
+    ).first()
+    if document is None:
+        raise HTTPException(status_code=404, detail="Election proof document not found")
+    assignment = db.query(CommitteeAssignment).filter(CommitteeAssignment.id == assignment_id).first()
+    if assignment is None or (assignment.user_id != current_user.id and not user_has_any_permission(current_user, ("roles.manage",), db)):
+        raise HTTPException(status_code=403, detail="You cannot remove this election proof")
+    stored_name = document.file_name
+    db.delete(document)
+    db.commit()
+    private_document_path(stored_name).unlink(missing_ok=True)
+    return {"message": "Election proof document removed"}
 
 
 @router.get("/permissions")

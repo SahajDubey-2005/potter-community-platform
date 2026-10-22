@@ -160,6 +160,18 @@ class CommitteeAssignment(Base):
     end_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
 
+class CommitteeElectionDocument(Base):
+    __tablename__ = "committee_election_documents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    assignment_id: Mapped[int] = mapped_column(ForeignKey("committee_assignments.id", ondelete="CASCADE"), index=True, nullable=False)
+    uploaded_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    title: Mapped[str] = mapped_column(String(160), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
 class CommunityRecord(Base):
     __tablename__ = "community_records"
 
@@ -287,6 +299,20 @@ class Notification(Base):
     category: Mapped[str] = mapped_column(String(40), default="community", nullable=False)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
+class SupportInquiry(Base):
+    __tablename__ = "support_inquiries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    full_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    phone_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    category: Mapped[str] = mapped_column(String(80), nullable=False)
+    message: Mapped[str] = mapped_column(String(3000), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="NEW", server_default="NEW", nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ActivityLog(Base):
