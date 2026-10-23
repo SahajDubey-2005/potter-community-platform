@@ -74,6 +74,9 @@ def record_activity(request, status_code: int) -> None:
 async def audit_mutations(request, call_next):
     if request.method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
         return await call_next(request)
+    # Deleting audit rows should not create replacement audit rows.
+    if request.url.path.startswith("/admin/audit-logs"):
+        return await call_next(request)
     try:
         response = await call_next(request)
     except Exception:

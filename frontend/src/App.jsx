@@ -6024,11 +6024,15 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
   const [roleNotice, setRoleNotice] = useState("");
   const [activityLogs, setActivityLogs] = useState([]);
   const [activityError, setActivityError] = useState("");
+  const [activityBusy, setActivityBusy] = useState(false);
   const [editingRoleId, setEditingRoleId] = useState(null);
   const [roleDraft, setRoleDraft] = useState({ name: "", description: "", permissions: [], is_active: true });
   const [assignmentTermStart, setAssignmentTermStart] = useState("");
   const [assignmentTermEnd, setAssignmentTermEnd] = useState("");
   const [assignmentMinutesReference, setAssignmentMinutesReference] = useState("");
+  const [roleProofFiles, setRoleProofFiles] = useState({});
+  const [roleProofTitles, setRoleProofTitles] = useState({});
+  const [roleProofBusyId, setRoleProofBusyId] = useState(null);
   const [adminDraft, setAdminDraft] = useState({ full_name: "", email: "", phone_number: "", password: "" });
   const [adminBusy, setAdminBusy] = useState(false);
   const canManageRoles = ["ADMIN", "SUPER ADMIN"].includes(String(activeUser?.role || "").toUpperCase()) || activeUser?.permissions?.includes("roles.manage");
@@ -6080,6 +6084,34 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
       setActivityLogs(Array.isArray(rows) ? rows : []);
     } catch (error) {
       setActivityError(error.message || "Could not load activity history.");
+    }
+  };
+
+  const deleteActivityLog = async (entry) => {
+    if (!window.confirm(`Delete this activity entry from ${new Date(entry.created_at).toLocaleString()}?`)) return;
+    setActivityBusy(true);
+    setActivityError("");
+    try {
+      await authApi(`/admin/audit-logs/${entry.id}`, { method: "DELETE" });
+      setActivityLogs((current) => current.filter((row) => row.id !== entry.id));
+    } catch (error) {
+      setActivityError(error.message || "Could not delete the activity entry.");
+    } finally {
+      setActivityBusy(false);
+    }
+  };
+
+  const clearActivityLogs = async () => {
+    if (!activityLogs.length || !window.confirm("Permanently delete all activity history? This cannot be undone.")) return;
+    setActivityBusy(true);
+    setActivityError("");
+    try {
+      await authApi("/admin/audit-logs", { method: "DELETE" });
+      setActivityLogs([]);
+    } catch (error) {
+      setActivityError(error.message || "Could not clear activity history.");
+    } finally {
+      setActivityBusy(false);
     }
   };
 
@@ -6193,6 +6225,36 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
     }
   };
 
+  const uploadElectionProofForMember = async (event, assignment) => {
+    event.preventDefault();
+    const file = roleProofFiles[assignment.id];
+    if (!file) {
+      setRoleError("Choose an election result or certificate file first.");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setRoleError("Election proof files must be 5 MB or smaller.");
+      return;
+    }
+    const formData = new FormData();
+    formData.append("title", (roleProofTitles[assignment.id] || "").trim() || "Election result proof");
+    formData.append("file", file);
+    setRoleProofBusyId(assignment.id);
+    setRoleError("");
+    setRoleNotice("");
+    try {
+      await authApi(`/admin/roles/assignments/${assignment.id}/election-documents`, { method: "POST", body: formData });
+      setRoleNotice(`Election proof added for ${assignment.member_name} (${assignment.role}).`);
+      setRoleProofFiles((previous) => ({ ...previous, [assignment.id]: null }));
+      setRoleProofTitles((previous) => ({ ...previous, [assignment.id]: "" }));
+      await loadRoleManagement();
+    } catch (error) {
+      setRoleError(error.message || "Could not upload the election proof.");
+    } finally {
+      setRoleProofBusyId(null);
+    }
+  };
+
   const revokeRole = async (user) => {
     const reason = window.prompt(`Reason for removing ${user.full_name} from the committee? Their member account will remain active.`);
     if (!reason || reason.trim().length < 3) return;
@@ -6295,7 +6357,7 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
         </details>}
 
         <div style={{ display: "grid", gap: 9, marginTop: 14 }}>
-          {roles.map((role) => <div key={role.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: 12, border: "1px solid #efe2d8", borderRadius: 9 }}><div><strong style={{ color: "#503326" }}>{role.name}</strong><div style={{ color: "#806b5e", fontSize: 11, marginTop: 3 }}>{role.description || "No description"} · {role.users_count} assigned · {role.is_active ? "Active" : "Inactive"}</div><div style={{ color: "#806b5e", fontSize: 11, marginTop: 3 }}>Permissions: {(role.permissions || []).length ? role.permissions.join(", ") : "None"}</div></div><div style={{ display: "flex", gap: 8 }}><button type="button" className="btn btn-outline" onClick={() => editRole(role)}>Edit</button>{!role.is_system && <button type="button" className="btn btn-outline" onClick={() => deleteRole(role)}>Delete role</button>}</div></div>)}
+          {roles.map((role) => <div key={role.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: 12, border: "1px solid #efe2d8", borderRadius: 9 }}><div><strong style={{ color: "#503326" }}>{role.name}</strong><div style={{ color: "#806b5e", fontSize: 11, marginTop: 3 }}>{role.description || "No description"} · {role.users_count} assigned · {role.is_active ? "Active" : "Inactive"}</div><div style={{ color: "#806b5e", fontSize: 11, marginTop: 3 }}>Permissions: {(role.permissions || []).length ? role.permissions.join(", ") : "None"}</div></div><div style={{ display: "flex", gap: 8 }}><button type="button" className="btn btn-outline" onClick={() => editRole(role)}>Edit</button>{!role.is_protected && <button type="button" className="btn btn-outline" onClick={() => deleteRole(role)}>Delete role</button>}</div></div>)}
         </div>
 
         <h3 style={{ margin: "20px 0 8px", color: "#503326", fontSize: 15 }}>Assign or end a role for an approved member</h3>
@@ -6319,7 +6381,12 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
           <div style={{ padding: 10, border: "1px solid #f0e2d8", borderRadius: 8, background: "#fffaf6" }}>
             <strong style={{ display: "block", marginBottom: 7, color: "#503326" }}>Election result proof</strong>
             {assignment.election_documents?.length ? <div style={{ display: "grid", gap: 6, marginBottom: 9 }}>{assignment.election_documents.map((proofDoc) => <div key={proofDoc.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 9, flexWrap: "wrap" }}><span>{proofDoc.title} · {proofDoc.original_filename}<small style={{ display: "block", color: "#806b5e", marginTop: 2 }}>Added {new Date(proofDoc.created_at).toLocaleString()}</small></span><div style={{ display: "flex", gap: 7 }}><button type="button" className="btn btn-outline" onClick={() => openElectionProof(proofDoc)}>View</button><button type="button" className="btn btn-outline" onClick={() => deleteElectionProof(assignment, proofDoc)}>Remove</button></div></div>)}</div> : <p style={{ margin: "0 0 8px", color: "#806b5e" }}>No election proof document uploaded for this assignment yet.</p>}
-            <p style={{ margin: "6px 0 0", color: "#806b5e" }}>The assigned member uploads their own election proof from their dashboard.</p>
+            <form onSubmit={(event) => uploadElectionProofForMember(event, assignment)} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 8, alignItems: "center", marginTop: 10 }}>
+              <input aria-label={`Election proof title for ${assignment.member_name}`} value={roleProofTitles[assignment.id] || ""} onChange={(event) => setRoleProofTitles((previous) => ({ ...previous, [assignment.id]: event.target.value }))} maxLength={160} placeholder="Document title (optional)" style={{ minWidth: 0, padding: 9, border: "1px solid #ddc9b7", borderRadius: 8 }} />
+              <input aria-label={`Election proof file for ${assignment.member_name}`} type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" onChange={(event) => setRoleProofFiles((previous) => ({ ...previous, [assignment.id]: event.target.files?.[0] || null }))} style={{ minWidth: 0, color: "#624b3d", fontSize: 11 }} />
+              <button type="submit" className="btn btn-outline" disabled={roleProofBusyId === assignment.id}>{roleProofBusyId === assignment.id ? "Uploading…" : "Add election proof"}</button>
+              {roleProofFiles[assignment.id] && <small style={{ gridColumn: "1 / -1", color: "#806b5e" }}>{roleProofFiles[assignment.id].name} · PDF, JPG, or PNG · Max 5 MB</small>}
+            </form>
           </div>
         </article>)}</div> : <p style={{ color: "#806b5e", fontSize: 12 }}>New assignments and handovers will be recorded here.</p>}
         </details>
@@ -6329,10 +6396,10 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
         <summary style={{ color: "#503326", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>Activity history</summary>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <div><h2 style={{ margin: "0 0 5px", color: "#503326", fontSize: 19 }}>Activity history</h2><p style={{ margin: 0, color: "#806b5e", fontSize: 12 }}>Administrative changes with timestamp, account, result, and connecting IP address.</p></div>
-          <button type="button" className="btn btn-outline" onClick={loadActivityLogs}>Refresh</button>
+          <div style={{ display: "flex", gap: 8 }}><button type="button" className="btn btn-outline" disabled={activityBusy} onClick={loadActivityLogs}>Refresh</button><button type="button" className="btn btn-outline" disabled={activityBusy || !activityLogs.length} onClick={clearActivityLogs}>Clear history</button></div>
         </div>
         {activityError && <p role="alert" style={{ color: "#a13d2d", fontSize: 12 }}>{activityError}</p>}
-        {activityLogs.length ? <div style={{ display: "grid", gap: 7, marginTop: 14 }}>{activityLogs.map((entry) => <div key={entry.id} style={{ display: "grid", gridTemplateColumns: "minmax(150px, 1.2fr) minmax(130px, 1fr) minmax(150px, 1.3fr) minmax(100px, .7fr)", gap: 10, padding: 10, border: "1px solid #efe2d8", borderRadius: 8, color: "#624b3d", fontSize: 11, overflowWrap: "anywhere" }}><span>{new Date(entry.created_at).toLocaleString()}</span><strong>{entry.actor_name}</strong><span>{entry.action} {entry.resource} · {entry.status_code}</span><span>IP: {entry.ip_address || "Unavailable"}</span></div>)}</div> : !activityError && <p style={{ color: "#806b5e", fontSize: 12, marginTop: 14 }}>No recorded activity yet.</p>}
+        {activityLogs.length ? <div style={{ display: "grid", gap: 7, marginTop: 14 }}>{activityLogs.map((entry) => <div key={entry.id} style={{ display: "grid", gridTemplateColumns: "minmax(130px, 1.2fr) minmax(110px, 1fr) minmax(130px, 1.3fr) minmax(90px, .7fr) auto", gap: 10, alignItems: "center", padding: 10, border: "1px solid #efe2d8", borderRadius: 8, color: "#624b3d", fontSize: 11, overflowWrap: "anywhere" }}><span>{new Date(entry.created_at).toLocaleString()}</span><strong>{entry.actor_name}</strong><span>{entry.action} {entry.resource} · {entry.status_code}</span><span>IP: {entry.ip_address || "Unavailable"}</span><button type="button" className="btn btn-outline" disabled={activityBusy} onClick={() => deleteActivityLog(entry)}>Delete</button></div>)}</div> : !activityError && <p style={{ color: "#806b5e", fontSize: 12, marginTop: 14 }}>No recorded activity yet.</p>}
       </details>}
 
       {!committeeOnly && <div className="settings-card">

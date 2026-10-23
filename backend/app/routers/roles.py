@@ -66,6 +66,7 @@ SYSTEM_ROLE_NAMES = {
     "EVENT COORDINATOR", "MEDIA COORDINATOR", "LEGAL GRIEVANCE COORDINATOR",
     "POTTER MARKET ENGAGEMENT COORDINATOR",
 }
+PROTECTED_PLATFORM_ROLE_NAMES = {"ADMIN", "SUPER ADMIN", "ARTISAN", "CITIZEN"}
 
 
 class RoleInput(BaseModel):
@@ -113,6 +114,7 @@ def serialize_role(role: Role, users_count: int = 0) -> dict:
         "is_active": role.is_active,
         "users_count": users_count,
         "is_system": role.name.strip().upper() in SYSTEM_ROLE_NAMES,
+        "is_protected": role.name.strip().upper() in PROTECTED_PLATFORM_ROLE_NAMES,
         "created_at": role.created_at.isoformat(),
     }
 
@@ -237,8 +239,8 @@ def delete_role(
     role = db.query(Role).filter(Role.id == role_id).first()
     if role is None:
         raise HTTPException(status_code=404, detail="Role not found")
-    if role.name.strip().upper() in SYSTEM_ROLE_NAMES:
-        raise HTTPException(status_code=403, detail="Built-in community roles cannot be deleted. Deactivate the role if it should no longer be assigned.")
+    if role.name.strip().upper() in PROTECTED_PLATFORM_ROLE_NAMES:
+        raise HTTPException(status_code=403, detail="Core platform roles cannot be deleted.")
     has_users = db.query(User.id).filter(User.role_id == role.id).first() is not None
     has_history = db.query(CommitteeAssignment.id).filter(CommitteeAssignment.role_id == role.id).first() is not None
     if has_users or has_history:
