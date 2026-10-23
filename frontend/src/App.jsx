@@ -44,6 +44,7 @@ import {
   RotateCcw,
   ClipboardCheck,
   FileCheck,
+  Phone,
   TrendingUp,
 } from "lucide-react";
 
@@ -421,12 +422,12 @@ const ROLE_DASHBOARD_CONFIG = {
   "Super Admin": {
     title: "Super Admin Dashboard",
     description: "Community-wide oversight and administration.",
-    actions: [{ label: "Members", page: "members" }, { label: "Committee & Roles", page: "committee-roles" }, { label: "Help & Support", page: "support-inquiries" }, { label: "Payments & Fees", page: "payments" }, { label: "Events", page: "events" }, { label: "Announcements", page: "announcements" }, { label: "Official records", page: "community-records" }],
+    actions: [{ label: "Members", page: "members" }, { label: "Committee & Roles", page: "committee-roles" }, { label: "Emergency Requests", page: "emergency" }, { label: "Help & Support", page: "support-inquiries" }, { label: "Payments & Fees", page: "payments" }, { label: "Events", page: "events" }, { label: "Announcements", page: "announcements" }, { label: "Official records", page: "community-records" }],
   },
   "Admin": {
     title: "Admin Dashboard",
     description: "Manage community operations and member services.",
-    actions: [{ label: "Members", page: "members" }, { label: "Committee & Roles", page: "committee-roles" }, { label: "Help & Support", page: "support-inquiries" }, { label: "Announcements", page: "announcements" }, { label: "Events", page: "events" }, { label: "Documents", page: "documents" }, { label: "Official records", page: "community-records" }],
+    actions: [{ label: "Members", page: "members" }, { label: "Committee & Roles", page: "committee-roles" }, { label: "Emergency Requests", page: "emergency" }, { label: "Help & Support", page: "support-inquiries" }, { label: "Announcements", page: "announcements" }, { label: "Events", page: "events" }, { label: "Documents", page: "documents" }, { label: "Official records", page: "community-records" }],
   },
   "President / Head": {
     title: "President Dashboard",
@@ -2268,7 +2269,7 @@ function MemberContent({
   }
 
   if (currentPage === "emergency") {
-    return <EmergencyPage />;
+    return <EmergencyPage activeUser={activeUser} />;
   }
 
   if (currentPage === "notifications") {
@@ -2891,6 +2892,7 @@ function Dashboard({ navigate, activeRole = "General Member", activeUser = null 
       ["matrimonial.review", { label: "Matrimonial", page: "matrimonial" }],
       ["roles.manage", { label: "Committee & Roles", page: "committee-roles" }],
       ["membership.review", { label: "Help & Support", page: "support-inquiries" }],
+      ["emergency.manage", { label: "Emergency Requests", page: "emergency" }],
     ].filter(([permission]) => activeUser?.permissions?.includes(permission)).map(([, action]) => action);
     return {
       title: `${dashboardRole} Dashboard`,
@@ -4996,100 +4998,102 @@ function DocumentsPage() {
    EMERGENCY
 ========================================================= */
 
-function EmergencyPage() {
+function EmergencyPage({ activeUser }) {
+  const isAdmin = ["ADMIN", "SUPER ADMIN"].includes(String(activeUser?.role || "").toUpperCase());
+  const canManage = isAdmin || activeUser?.permissions?.includes("emergency.manage");
+  const isApproved = String(activeUser?.membership_status || "").toUpperCase() === "APPROVED";
+  const [requests, setRequests] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [busyId, setBusyId] = useState(null);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [requestType, setRequestType] = useState("");
+  const [description, setDescription] = useState("");
+  const [location, setLocation] = useState("");
+  const [phone, setPhone] = useState(activeUser?.phone_number || "");
+  const [reviewNotes, setReviewNotes] = useState({});
+
+  const loadRequests = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const result = await authApi("/emergency/requests");
+      setRequests(Array.isArray(result) ? result : []);
+    } catch (loadError) {
+      setError(loadError.message || "Sign in with an approved member account to use Emergency Support.");
+    } finally { setLoading(false); }
+  };
+  useEffect(() => { loadRequests(); }, []);
+
+  const submitRequest = async (event) => {
+    event.preventDefault();
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const created = await authApi("/emergency/requests", {
+        method: "POST",
+        body: JSON.stringify({ emergency_type: requestType, description, location, contact_phone: phone }),
+      });
+      setNotice("Your request was sent to the community emergency support team. Call local emergency services for immediate danger.");
+      setRequests((previous) => [created, ...previous]);
+      setRequestType(""); setDescription(""); setLocation("");
+    } catch (submitError) { setError(submitError.message || "Could not submit the emergency request."); }
+    finally { setBusy(false); }
+  };
+
+  const updateRequest = async (item, nextStatus) => {
+    setBusyId(item.id); setError(""); setNotice("");
+    try {
+      const updated = await authApi(`/emergency/requests/${item.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: nextStatus, review_note: reviewNotes[item.id] || null }),
+      });
+      setRequests((previous) => previous.map((request) => request.id === item.id ? updated : request));
+      setNotice(`Emergency request #${item.id} marked ${nextStatus.toLowerCase()}.`);
+    } catch (updateError) { setError(updateError.message || "Could not update this request."); }
+    finally { setBusyId(null); }
+  };
+
+  const statusColor = (status) => status === "RESOLVED" ? "#397448" : status === "REJECTED" ? "#a1261c" : "#a65332";
   return (
     <PageWrapper>
-      <PageHeader
-        title="Emergency Support"
-        description="Get assistance during emergencies and critical situations."
-      />
-
-      <div className="emergency-warning">
-        <AlertTriangle size={22} />
-
-        <div>
-          <strong>Emergency assistance</strong>
-
-          <p>
-            Use this service to request community assistance.
-            For immediate life-threatening situations, contact
-            your local emergency services.
-          </p>
-        </div>
-      </div>
-
+      <PageHeader title={canManage ? "Emergency Support Requests" : "Emergency Support"} description={canManage ? "Review incoming requests and update their status." : "Send a request to the community emergency support team and track its status."} />
+      <div className="emergency-warning"><AlertTriangle size={22} /><div><strong>For immediate danger, call local emergency services.</strong><p>This form contacts the Potter Community team. It is not an emergency dispatch service.</p></div></div>
+      {notice && <div role="status" style={{ marginBottom: 14, padding: 12, borderRadius: 10, background: "#f0faf2", color: "#216b35" }}>{notice}</div>}
+      {error && <div role="alert" style={{ marginBottom: 14, padding: 12, borderRadius: 10, background: "#fff1f0", color: "#a1261c" }}>{error}</div>}
       <div className="emergency-grid">
-        <div className="emergency-main-card">
-          <div className="emergency-icon">
-            <HeartPulse size={30} />
-          </div>
-
+        <form className="emergency-main-card" onSubmit={submitRequest}>
+          <div className="emergency-icon"><HeartPulse size={30} /></div>
           <h2>Request Emergency Support</h2>
-
-          <p>
-            Submit your emergency details so available
-            community support can respond.
-          </p>
-
-          <select>
-            <option>Select Emergency Type</option>
-            <option>Medical Emergency</option>
-            <option>Accident</option>
-            <option>Blood Requirement</option>
-            <option>Other Emergency</option>
+          <p>Tell the support team what happened, where help is needed, and how to contact you.</p>
+          {!isApproved && <p role="note">Sign in with an approved member account to send an emergency request.</p>}
+          <label htmlFor="emergency-type">Emergency type</label>
+          <select id="emergency-type" value={requestType} onChange={(event) => setRequestType(event.target.value)} required disabled={!isApproved}>
+            <option value="">Select emergency type</option><option>Medical Emergency</option><option>Accident</option><option>Blood Requirement</option><option>Other Emergency</option>
           </select>
-
-          <textarea placeholder="Describe your emergency..." />
-
-          <button className="btn emergency-button">
-            <HeartPulse size={18} />
-            Request Assistance
-          </button>
-        </div>
-
-        <div className="assistance-card">
-          <h3>Nearby Assistance</h3>
-
-          {[
-            [
-              "Hospitals",
-              "Find nearby hospitals",
-            ],
-            [
-              "Blood Banks",
-              "Find blood availability",
-            ],
-            [
-              "Community Volunteers",
-              "Contact available volunteers",
-            ],
-            [
-              "Emergency Contacts",
-              "View emergency contacts",
-            ],
-            [
-              "Ambulance Support",
-              "Find available assistance",
-            ],
-          ].map(([title, text]) => (
-            <div
-              className="assistance-item"
-              key={title}
-            >
-              <div className="assistance-icon">
-                <HeartPulse size={18} />
-              </div>
-
-              <div>
-                <strong>{title}</strong>
-                <span>{text}</span>
-              </div>
-
-              <ChevronRight size={17} />
-            </div>
-          ))}
+          <label htmlFor="emergency-location">Location where help is needed</label>
+          <input id="emergency-location" value={location} onChange={(event) => setLocation(event.target.value)} maxLength={500} placeholder="Area, town or full address" required disabled={!isApproved} />
+          <label htmlFor="emergency-phone">Contact phone</label>
+          <input id="emergency-phone" type="tel" inputMode="tel" value={phone} onChange={(event) => setPhone(event.target.value)} maxLength={20} placeholder="10-digit phone number" required disabled={!isApproved} />
+          <label htmlFor="emergency-description">What happened?</label>
+          <textarea id="emergency-description" value={description} onChange={(event) => setDescription(event.target.value)} minLength={10} maxLength={3000} placeholder="Share the details the support team needs to respond." required disabled={!isApproved} />
+          <button type="submit" className="btn emergency-button" disabled={busy || !isApproved}><HeartPulse size={18} />{busy ? "Sending request…" : "Request Assistance"}</button>
+        </form>
+        <div className="assistance-card"><h3>What happens next</h3>
+          <div className="assistance-item"><div className="assistance-icon"><FileCheck size={18} /></div><div><strong>Request is recorded</strong><span>Your request and contact details are saved securely.</span></div></div>
+          <div className="assistance-item"><div className="assistance-icon"><Bell size={18} /></div><div><strong>Support team is notified</strong><span>The Emergency Support team receives an in-app notification.</span></div></div>
+          <div className="assistance-item"><div className="assistance-icon"><Phone size={18} /></div><div><strong>Track the response</strong><span>Status updates appear below and in your notifications.</span></div></div>
         </div>
       </div>
+      <section style={{ marginTop: 22 }}><div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}><h2 style={{ color: "var(--dark-brown)" }}>{canManage ? "Incoming requests" : "Your requests"}</h2><button className="btn btn-outline" type="button" onClick={loadRequests} disabled={loading}>{loading ? "Loading…" : "Refresh"}</button></div>
+        {loading ? <p>Loading requests…</p> : requests.length === 0 ? <EmptyState title="No emergency requests yet" description={canManage ? "New community requests will appear here." : "Requests you submit will appear here so you can follow their status."} /> :
+          <div style={{ display: "grid", gap: 12 }}>{requests.map((item) => <article key={item.id} style={{ padding: 16, background: "#fff", border: "1px solid var(--border)", borderRadius: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}><strong>{item.emergency_type}{canManage && item.member_name ? ` · ${item.member_name}` : ""}</strong><strong style={{ color: statusColor(item.status) }}>{item.status.replaceAll("_", " ")}</strong></div>
+            <p style={{ margin: "9px 0", whiteSpace: "pre-wrap" }}>{item.description}</p><div style={{ color: "var(--muted)", fontSize: 12 }}>Location: {item.location} · Contact: <a href={`tel:${item.contact_phone}`}>{item.contact_phone}</a> · Sent {new Date(item.created_at).toLocaleString()}</div>
+            {item.review_note && <p style={{ margin: "9px 0 0", color: "#624b3d" }}>Team update: {item.review_note}</p>}
+            {canManage && item.status !== "RESOLVED" && item.status !== "REJECTED" && <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}><input value={reviewNotes[item.id] || ""} onChange={(event) => setReviewNotes((previous) => ({ ...previous, [item.id]: event.target.value }))} maxLength={1000} placeholder="Optional update for the member" aria-label="Update for the member" style={{ flex: "1 1 240px", padding: 10, border: "1px solid var(--border)", borderRadius: 8 }} /><button className="btn btn-outline" type="button" disabled={busyId === item.id} onClick={() => updateRequest(item, "ACKNOWLEDGED")}>Acknowledge</button><button className="btn btn-primary" type="button" disabled={busyId === item.id} onClick={() => updateRequest(item, "RESOLVED")}>Resolve</button></div>}
+          </article>)}</div>}
+      </section>
     </PageWrapper>
   );
 }
@@ -6044,6 +6048,7 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
     ["community.records.manage", "Create community records and meeting minutes"],
     ["community.approve", "Approve committee notices and decisions"],
     ["marketplace.manage", "Manage marketplace engagement"],
+    ["emergency.manage", "Review emergency support requests"],
     ["roles.manage", "Manage roles and assignments"],
   ];
 

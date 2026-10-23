@@ -1760,6 +1760,7 @@ button {
 }
 
 .emergency-main-card select,
+.emergency-main-card input,
 .emergency-main-card textarea {
   width: 100%;
 
@@ -1776,6 +1777,14 @@ button {
   margin-bottom: 10px;
 
   background: white;
+}
+
+.emergency-main-card label {
+  display: block;
+  color: var(--dark-brown);
+  font-size: 11px;
+  font-weight: 700;
+  margin: 4px 0 6px;
 }
 
 .emergency-main-card textarea {

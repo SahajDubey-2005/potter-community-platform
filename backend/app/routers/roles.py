@@ -19,6 +19,7 @@ from app.models import (
     CommunityEvent,
     CommunityRecord,
     EventRegistration,
+    EmergencyRequest,
     FamilyMember,
     FinancePolicy,
     FinancialRefund,
@@ -55,6 +56,7 @@ AVAILABLE_PERMISSIONS = {
     "community.records.manage",
     "community.approve",
     "marketplace.manage",
+    "emergency.manage",
 }
 
 SYSTEM_ROLE_NAMES = {
@@ -437,6 +439,7 @@ def delete_member_account(
         db.query(PasswordResetToken).filter(PasswordResetToken.user_id == user_id).delete(synchronize_session=False)
         db.query(Notification).filter(Notification.user_id == user_id).delete(synchronize_session=False)
         db.query(FamilyMember).filter(FamilyMember.primary_user_id == user_id).delete(synchronize_session=False)
+        db.query(EmergencyRequest).filter(EmergencyRequest.user_id == user_id).delete(synchronize_session=False)
         if election_documents:
             db.query(CommitteeElectionDocument).filter(CommitteeElectionDocument.id.in_([row.id for row in election_documents])).delete(synchronize_session=False)
         db.query(CommitteeAssignment).filter(CommitteeAssignment.user_id == user_id).delete(synchronize_session=False)
