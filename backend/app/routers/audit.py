@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.auth import require_role
@@ -37,3 +37,27 @@ def list_activity_logs(
         }
         for log, actor_name in rows
     ]
+
+
+@router.delete("/{log_id}")
+def delete_activity_log(
+    log_id: int,
+    current_user: User = Depends(require_role("ADMIN")),
+    db: Session = Depends(get_db),
+):
+    log = db.query(ActivityLog).filter(ActivityLog.id == log_id).first()
+    if log is None:
+        raise HTTPException(status_code=404, detail="Activity entry not found")
+    db.delete(log)
+    db.commit()
+    return {"message": "Activity entry deleted"}
+
+
+@router.delete("")
+def clear_activity_logs(
+    current_user: User = Depends(require_role("ADMIN")),
+    db: Session = Depends(get_db),
+):
+    deleted_count = db.query(ActivityLog).delete(synchronize_session=False)
+    db.commit()
+    return {"message": "Activity history cleared", "deleted_count": deleted_count}

@@ -21,3 +21,12 @@ backend/private_uploads/
 
 # OS files
 .DS_Store
+
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.db
+.env
+backend/uploads/*
+!backend/uploads/.gitkeep

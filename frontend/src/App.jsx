@@ -44,6 +44,7 @@ import {
   RotateCcw,
   ClipboardCheck,
   FileCheck,
+  Phone,
   TrendingUp,
   ImagePlus,
   UserRound,
@@ -424,12 +425,12 @@ const ROLE_DASHBOARD_CONFIG = {
   "Super Admin": {
     title: "Super Admin Dashboard",
     description: "Community-wide oversight and administration.",
-    actions: [{ label: "Members", page: "members" }, { label: "Committee & Roles", page: "committee-roles" }, { label: "Help & Support", page: "support-inquiries" }, { label: "Payments & Fees", page: "payments" }, { label: "Events", page: "events" }, { label: "Announcements", page: "announcements" }, { label: "Official records", page: "community-records" }],
+    actions: [{ label: "Members", page: "members" }, { label: "Committee & Roles", page: "committee-roles" }, { label: "Emergency Requests", page: "emergency" }, { label: "Help & Support", page: "support-inquiries" }, { label: "Payments & Fees", page: "payments" }, { label: "Events", page: "events" }, { label: "Announcements", page: "announcements" }, { label: "Official records", page: "community-records" }],
   },
   "Admin": {
     title: "Admin Dashboard",
     description: "Manage community operations and member services.",
-    actions: [{ label: "Members", page: "members" }, { label: "Committee & Roles", page: "committee-roles" }, { label: "Help & Support", page: "support-inquiries" }, { label: "Announcements", page: "announcements" }, { label: "Events", page: "events" }, { label: "Documents", page: "documents" }, { label: "Official records", page: "community-records" }],
+    actions: [{ label: "Members", page: "members" }, { label: "Committee & Roles", page: "committee-roles" }, { label: "Emergency Requests", page: "emergency" }, { label: "Help & Support", page: "support-inquiries" }, { label: "Announcements", page: "announcements" }, { label: "Events", page: "events" }, { label: "Documents", page: "documents" }, { label: "Official records", page: "community-records" }],
   },
   "President / Head": {
     title: "President Dashboard",
@@ -2447,7 +2448,7 @@ function MemberContent({
   }
 
   if (currentPage === "emergency") {
-    return <EmergencyPage />;
+    return <EmergencyPage activeUser={activeUser} />;
   }
 
   if (currentPage === "notifications") {
@@ -3097,6 +3098,7 @@ function Dashboard({ navigate, activeRole = "General Member", activeUser = null 
       ["matrimonial.review", { label: "Matrimonial", page: "matrimonial" }],
       ["roles.manage", { label: "Committee & Roles", page: "committee-roles" }],
       ["membership.review", { label: "Help & Support", page: "support-inquiries" }],
+      ["emergency.manage", { label: "Emergency Requests", page: "emergency" }],
     ].filter(([permission]) => activeUser?.permissions?.includes(permission)).map(([, action]) => action);
     return {
       title: `${dashboardRole} Dashboard`,
@@ -5141,100 +5143,102 @@ function DocumentsPage() {
    EMERGENCY
 ========================================================= */
 
-function EmergencyPage() {
+function EmergencyPage({ activeUser }) {
+  const isAdmin = ["ADMIN", "SUPER ADMIN"].includes(String(activeUser?.role || "").toUpperCase());
+  const canManage = isAdmin || activeUser?.permissions?.includes("emergency.manage");
+  const isApproved = String(activeUser?.membership_status || "").toUpperCase() === "APPROVED";
+  const [requests, setRequests] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [busyId, setBusyId] = useState(null);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [requestType, setRequestType] = useState("");
+  const [description, setDescription] = useState("");
+  const [location, setLocation] = useState("");
+  const [phone, setPhone] = useState(activeUser?.phone_number || "");
+  const [reviewNotes, setReviewNotes] = useState({});
+
+  const loadRequests = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const result = await authApi("/emergency/requests");
+      setRequests(Array.isArray(result) ? result : []);
+    } catch (loadError) {
+      setError(loadError.message || "Sign in with an approved member account to use Emergency Support.");
+    } finally { setLoading(false); }
+  };
+  useEffect(() => { loadRequests(); }, []);
+
+  const submitRequest = async (event) => {
+    event.preventDefault();
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const created = await authApi("/emergency/requests", {
+        method: "POST",
+        body: JSON.stringify({ emergency_type: requestType, description, location, contact_phone: phone }),
+      });
+      setNotice("Your request was sent to the community emergency support team. Call local emergency services for immediate danger.");
+      setRequests((previous) => [created, ...previous]);
+      setRequestType(""); setDescription(""); setLocation("");
+    } catch (submitError) { setError(submitError.message || "Could not submit the emergency request."); }
+    finally { setBusy(false); }
+  };
+
+  const updateRequest = async (item, nextStatus) => {
+    setBusyId(item.id); setError(""); setNotice("");
+    try {
+      const updated = await authApi(`/emergency/requests/${item.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: nextStatus, review_note: reviewNotes[item.id] || null }),
+      });
+      setRequests((previous) => previous.map((request) => request.id === item.id ? updated : request));
+      setNotice(`Emergency request #${item.id} marked ${nextStatus.toLowerCase()}.`);
+    } catch (updateError) { setError(updateError.message || "Could not update this request."); }
+    finally { setBusyId(null); }
+  };
+
+  const statusColor = (status) => status === "RESOLVED" ? "#397448" : status === "REJECTED" ? "#a1261c" : "#a65332";
   return (
     <PageWrapper>
-      <PageHeader
-        title="Emergency Support"
-        description="Get assistance during emergencies and critical situations."
-      />
-
-      <div className="emergency-warning">
-        <AlertTriangle size={22} />
-
-        <div>
-          <strong>Emergency assistance</strong>
-
-          <p>
-            Use this service to request community assistance.
-            For immediate life-threatening situations, contact
-            your local emergency services.
-          </p>
-        </div>
-      </div>
-
+      <PageHeader title={canManage ? "Emergency Support Requests" : "Emergency Support"} description={canManage ? "Review incoming requests and update their status." : "Send a request to the community emergency support team and track its status."} />
+      <div className="emergency-warning"><AlertTriangle size={22} /><div><strong>For immediate danger, call local emergency services.</strong><p>This form contacts the Potter Community team. It is not an emergency dispatch service.</p></div></div>
+      {notice && <div role="status" style={{ marginBottom: 14, padding: 12, borderRadius: 10, background: "#f0faf2", color: "#216b35" }}>{notice}</div>}
+      {error && <div role="alert" style={{ marginBottom: 14, padding: 12, borderRadius: 10, background: "#fff1f0", color: "#a1261c" }}>{error}</div>}
       <div className="emergency-grid">
-        <div className="emergency-main-card">
-          <div className="emergency-icon">
-            <HeartPulse size={30} />
-          </div>
-
+        <form className="emergency-main-card" onSubmit={submitRequest}>
+          <div className="emergency-icon"><HeartPulse size={30} /></div>
           <h2>Request Emergency Support</h2>
-
-          <p>
-            Submit your emergency details so available
-            community support can respond.
-          </p>
-
-          <select>
-            <option>Select Emergency Type</option>
-            <option>Medical Emergency</option>
-            <option>Accident</option>
-            <option>Blood Requirement</option>
-            <option>Other Emergency</option>
+          <p>Tell the support team what happened, where help is needed, and how to contact you.</p>
+          {!isApproved && <p role="note">Sign in with an approved member account to send an emergency request.</p>}
+          <label htmlFor="emergency-type">Emergency type</label>
+          <select id="emergency-type" value={requestType} onChange={(event) => setRequestType(event.target.value)} required disabled={!isApproved}>
+            <option value="">Select emergency type</option><option>Medical Emergency</option><option>Accident</option><option>Blood Requirement</option><option>Other Emergency</option>
           </select>
-
-          <textarea placeholder="Describe your emergency..." />
-
-          <button className="btn emergency-button">
-            <HeartPulse size={18} />
-            Request Assistance
-          </button>
-        </div>
-
-        <div className="assistance-card">
-          <h3>Nearby Assistance</h3>
-
-          {[
-            [
-              "Hospitals",
-              "Find nearby hospitals",
-            ],
-            [
-              "Blood Banks",
-              "Find blood availability",
-            ],
-            [
-              "Community Volunteers",
-              "Contact available volunteers",
-            ],
-            [
-              "Emergency Contacts",
-              "View emergency contacts",
-            ],
-            [
-              "Ambulance Support",
-              "Find available assistance",
-            ],
-          ].map(([title, text]) => (
-            <div
-              className="assistance-item"
-              key={title}
-            >
-              <div className="assistance-icon">
-                <HeartPulse size={18} />
-              </div>
-
-              <div>
-                <strong>{title}</strong>
-                <span>{text}</span>
-              </div>
-
-              <ChevronRight size={17} />
-            </div>
-          ))}
+          <label htmlFor="emergency-location">Location where help is needed</label>
+          <input id="emergency-location" value={location} onChange={(event) => setLocation(event.target.value)} maxLength={500} placeholder="Area, town or full address" required disabled={!isApproved} />
+          <label htmlFor="emergency-phone">Contact phone</label>
+          <input id="emergency-phone" type="tel" inputMode="tel" value={phone} onChange={(event) => setPhone(event.target.value)} maxLength={20} placeholder="10-digit phone number" required disabled={!isApproved} />
+          <label htmlFor="emergency-description">What happened?</label>
+          <textarea id="emergency-description" value={description} onChange={(event) => setDescription(event.target.value)} minLength={10} maxLength={3000} placeholder="Share the details the support team needs to respond." required disabled={!isApproved} />
+          <button type="submit" className="btn emergency-button" disabled={busy || !isApproved}><HeartPulse size={18} />{busy ? "Sending request…" : "Request Assistance"}</button>
+        </form>
+        <div className="assistance-card"><h3>What happens next</h3>
+          <div className="assistance-item"><div className="assistance-icon"><FileCheck size={18} /></div><div><strong>Request is recorded</strong><span>Your request and contact details are saved securely.</span></div></div>
+          <div className="assistance-item"><div className="assistance-icon"><Bell size={18} /></div><div><strong>Support team is notified</strong><span>The Emergency Support team receives an in-app notification.</span></div></div>
+          <div className="assistance-item"><div className="assistance-icon"><Phone size={18} /></div><div><strong>Track the response</strong><span>Status updates appear below and in your notifications.</span></div></div>
         </div>
       </div>
+      <section style={{ marginTop: 22 }}><div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}><h2 style={{ color: "var(--dark-brown)" }}>{canManage ? "Incoming requests" : "Your requests"}</h2><button className="btn btn-outline" type="button" onClick={loadRequests} disabled={loading}>{loading ? "Loading…" : "Refresh"}</button></div>
+        {loading ? <p>Loading requests…</p> : requests.length === 0 ? <EmptyState title="No emergency requests yet" description={canManage ? "New community requests will appear here." : "Requests you submit will appear here so you can follow their status."} /> :
+          <div style={{ display: "grid", gap: 12 }}>{requests.map((item) => <article key={item.id} style={{ padding: 16, background: "#fff", border: "1px solid var(--border)", borderRadius: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}><strong>{item.emergency_type}{canManage && item.member_name ? ` · ${item.member_name}` : ""}</strong><strong style={{ color: statusColor(item.status) }}>{item.status.replaceAll("_", " ")}</strong></div>
+            <p style={{ margin: "9px 0", whiteSpace: "pre-wrap" }}>{item.description}</p><div style={{ color: "var(--muted)", fontSize: 12 }}>Location: {item.location} · Contact: <a href={`tel:${item.contact_phone}`}>{item.contact_phone}</a> · Sent {new Date(item.created_at).toLocaleString()}</div>
+            {item.review_note && <p style={{ margin: "9px 0 0", color: "#624b3d" }}>Team update: {item.review_note}</p>}
+            {canManage && item.status !== "RESOLVED" && item.status !== "REJECTED" && <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}><input value={reviewNotes[item.id] || ""} onChange={(event) => setReviewNotes((previous) => ({ ...previous, [item.id]: event.target.value }))} maxLength={1000} placeholder="Optional update for the member" aria-label="Update for the member" style={{ flex: "1 1 240px", padding: 10, border: "1px solid var(--border)", borderRadius: 8 }} /><button className="btn btn-outline" type="button" disabled={busyId === item.id} onClick={() => updateRequest(item, "ACKNOWLEDGED")}>Acknowledge</button><button className="btn btn-primary" type="button" disabled={busyId === item.id} onClick={() => updateRequest(item, "RESOLVED")}>Resolve</button></div>}
+          </article>)}</div>}
+      </section>
     </PageWrapper>
   );
 }
@@ -6200,11 +6204,15 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
   const [roleNotice, setRoleNotice] = useState("");
   const [activityLogs, setActivityLogs] = useState([]);
   const [activityError, setActivityError] = useState("");
+  const [activityBusy, setActivityBusy] = useState(false);
   const [editingRoleId, setEditingRoleId] = useState(null);
   const [roleDraft, setRoleDraft] = useState({ name: "", description: "", permissions: [], is_active: true });
   const [assignmentTermStart, setAssignmentTermStart] = useState("");
   const [assignmentTermEnd, setAssignmentTermEnd] = useState("");
   const [assignmentMinutesReference, setAssignmentMinutesReference] = useState("");
+  const [roleProofFiles, setRoleProofFiles] = useState({});
+  const [roleProofTitles, setRoleProofTitles] = useState({});
+  const [roleProofBusyId, setRoleProofBusyId] = useState(null);
   const [adminDraft, setAdminDraft] = useState({ full_name: "", email: "", phone_number: "", password: "" });
   const [adminBusy, setAdminBusy] = useState(false);
   const canManageRoles = ["ADMIN", "SUPER ADMIN"].includes(String(activeUser?.role || "").toUpperCase()) || activeUser?.permissions?.includes("roles.manage");
@@ -6224,6 +6232,7 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
     ["community.records.manage", "Create community records and meeting minutes"],
     ["community.approve", "Approve committee notices and decisions"],
     ["marketplace.manage", "Manage marketplace engagement"],
+    ["emergency.manage", "Review emergency support requests"],
     ["roles.manage", "Manage roles and assignments"],
   ];
 
@@ -6255,6 +6264,34 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
       setActivityLogs(Array.isArray(rows) ? rows : []);
     } catch (error) {
       setActivityError(error.message || "Could not load activity history.");
+    }
+  };
+
+  const deleteActivityLog = async (entry) => {
+    if (!window.confirm(`Delete this activity entry from ${new Date(entry.created_at).toLocaleString()}?`)) return;
+    setActivityBusy(true);
+    setActivityError("");
+    try {
+      await authApi(`/admin/audit-logs/${entry.id}`, { method: "DELETE" });
+      setActivityLogs((current) => current.filter((row) => row.id !== entry.id));
+    } catch (error) {
+      setActivityError(error.message || "Could not delete the activity entry.");
+    } finally {
+      setActivityBusy(false);
+    }
+  };
+
+  const clearActivityLogs = async () => {
+    if (!activityLogs.length || !window.confirm("Permanently delete all activity history? This cannot be undone.")) return;
+    setActivityBusy(true);
+    setActivityError("");
+    try {
+      await authApi("/admin/audit-logs", { method: "DELETE" });
+      setActivityLogs([]);
+    } catch (error) {
+      setActivityError(error.message || "Could not clear activity history.");
+    } finally {
+      setActivityBusy(false);
     }
   };
 
@@ -6368,6 +6405,36 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
     }
   };
 
+  const uploadElectionProofForMember = async (event, assignment) => {
+    event.preventDefault();
+    const file = roleProofFiles[assignment.id];
+    if (!file) {
+      setRoleError("Choose an election result or certificate file first.");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setRoleError("Election proof files must be 5 MB or smaller.");
+      return;
+    }
+    const formData = new FormData();
+    formData.append("title", (roleProofTitles[assignment.id] || "").trim() || "Election result proof");
+    formData.append("file", file);
+    setRoleProofBusyId(assignment.id);
+    setRoleError("");
+    setRoleNotice("");
+    try {
+      await authApi(`/admin/roles/assignments/${assignment.id}/election-documents`, { method: "POST", body: formData });
+      setRoleNotice(`Election proof added for ${assignment.member_name} (${assignment.role}).`);
+      setRoleProofFiles((previous) => ({ ...previous, [assignment.id]: null }));
+      setRoleProofTitles((previous) => ({ ...previous, [assignment.id]: "" }));
+      await loadRoleManagement();
+    } catch (error) {
+      setRoleError(error.message || "Could not upload the election proof.");
+    } finally {
+      setRoleProofBusyId(null);
+    }
+  };
+
   const revokeRole = async (user) => {
     const reason = window.prompt(`Reason for removing ${user.full_name} from the committee? Their member account will remain active.`);
     if (!reason || reason.trim().length < 3) return;
@@ -6470,7 +6537,7 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
         </details>}
 
         <div style={{ display: "grid", gap: 9, marginTop: 14 }}>
-          {roles.map((role) => <div key={role.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: 12, border: "1px solid #efe2d8", borderRadius: 9 }}><div><strong style={{ color: "#503326" }}>{role.name}</strong><div style={{ color: "#806b5e", fontSize: 11, marginTop: 3 }}>{role.description || "No description"} · {role.users_count} assigned · {role.is_active ? "Active" : "Inactive"}</div><div style={{ color: "#806b5e", fontSize: 11, marginTop: 3 }}>Permissions: {(role.permissions || []).length ? role.permissions.join(", ") : "None"}</div></div><div style={{ display: "flex", gap: 8 }}><button type="button" className="btn btn-outline" onClick={() => editRole(role)}>Edit</button>{!role.is_system && <button type="button" className="btn btn-outline" onClick={() => deleteRole(role)}>Delete role</button>}</div></div>)}
+          {roles.map((role) => <div key={role.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", padding: 12, border: "1px solid #efe2d8", borderRadius: 9 }}><div><strong style={{ color: "#503326" }}>{role.name}</strong><div style={{ color: "#806b5e", fontSize: 11, marginTop: 3 }}>{role.description || "No description"} · {role.users_count} assigned · {role.is_active ? "Active" : "Inactive"}</div><div style={{ color: "#806b5e", fontSize: 11, marginTop: 3 }}>Permissions: {(role.permissions || []).length ? role.permissions.join(", ") : "None"}</div></div><div style={{ display: "flex", gap: 8 }}><button type="button" className="btn btn-outline" onClick={() => editRole(role)}>Edit</button>{!role.is_protected && <button type="button" className="btn btn-outline" onClick={() => deleteRole(role)}>Delete role</button>}</div></div>)}
         </div>
 
         <h3 style={{ margin: "20px 0 8px", color: "#503326", fontSize: 15 }}>Assign or end a role for an approved member</h3>
@@ -6494,7 +6561,12 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
           <div style={{ padding: 10, border: "1px solid #f0e2d8", borderRadius: 8, background: "#fffaf6" }}>
             <strong style={{ display: "block", marginBottom: 7, color: "#503326" }}>Election result proof</strong>
             {assignment.election_documents?.length ? <div style={{ display: "grid", gap: 6, marginBottom: 9 }}>{assignment.election_documents.map((proofDoc) => <div key={proofDoc.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 9, flexWrap: "wrap" }}><span>{proofDoc.title} · {proofDoc.original_filename}<small style={{ display: "block", color: "#806b5e", marginTop: 2 }}>Added {new Date(proofDoc.created_at).toLocaleString()}</small></span><div style={{ display: "flex", gap: 7 }}><button type="button" className="btn btn-outline" onClick={() => openElectionProof(proofDoc)}>View</button><button type="button" className="btn btn-outline" onClick={() => deleteElectionProof(assignment, proofDoc)}>Remove</button></div></div>)}</div> : <p style={{ margin: "0 0 8px", color: "#806b5e" }}>No election proof document uploaded for this assignment yet.</p>}
-            <p style={{ margin: "6px 0 0", color: "#806b5e" }}>The assigned member uploads their own election proof from their dashboard.</p>
+            <form onSubmit={(event) => uploadElectionProofForMember(event, assignment)} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 8, alignItems: "center", marginTop: 10 }}>
+              <input aria-label={`Election proof title for ${assignment.member_name}`} value={roleProofTitles[assignment.id] || ""} onChange={(event) => setRoleProofTitles((previous) => ({ ...previous, [assignment.id]: event.target.value }))} maxLength={160} placeholder="Document title (optional)" style={{ minWidth: 0, padding: 9, border: "1px solid #ddc9b7", borderRadius: 8 }} />
+              <input aria-label={`Election proof file for ${assignment.member_name}`} type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" onChange={(event) => setRoleProofFiles((previous) => ({ ...previous, [assignment.id]: event.target.files?.[0] || null }))} style={{ minWidth: 0, color: "#624b3d", fontSize: 11 }} />
+              <button type="submit" className="btn btn-outline" disabled={roleProofBusyId === assignment.id}>{roleProofBusyId === assignment.id ? "Uploading…" : "Add election proof"}</button>
+              {roleProofFiles[assignment.id] && <small style={{ gridColumn: "1 / -1", color: "#806b5e" }}>{roleProofFiles[assignment.id].name} · PDF, JPG, or PNG · Max 5 MB</small>}
+            </form>
           </div>
         </article>)}</div> : <p style={{ color: "#806b5e", fontSize: 12 }}>New assignments and handovers will be recorded here.</p>}
         </details>
@@ -6504,10 +6576,10 @@ function SettingsPage({ activeUser, committeeOnly = false }) {
         <summary style={{ color: "#503326", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>Activity history</summary>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <div><h2 style={{ margin: "0 0 5px", color: "#503326", fontSize: 19 }}>Activity history</h2><p style={{ margin: 0, color: "#806b5e", fontSize: 12 }}>Administrative changes with timestamp, account, result, and connecting IP address.</p></div>
-          <button type="button" className="btn btn-outline" onClick={loadActivityLogs}>Refresh</button>
+          <div style={{ display: "flex", gap: 8 }}><button type="button" className="btn btn-outline" disabled={activityBusy} onClick={loadActivityLogs}>Refresh</button><button type="button" className="btn btn-outline" disabled={activityBusy || !activityLogs.length} onClick={clearActivityLogs}>Clear history</button></div>
         </div>
         {activityError && <p role="alert" style={{ color: "#a13d2d", fontSize: 12 }}>{activityError}</p>}
-        {activityLogs.length ? <div style={{ display: "grid", gap: 7, marginTop: 14 }}>{activityLogs.map((entry) => <div key={entry.id} style={{ display: "grid", gridTemplateColumns: "minmax(150px, 1.2fr) minmax(130px, 1fr) minmax(150px, 1.3fr) minmax(100px, .7fr)", gap: 10, padding: 10, border: "1px solid #efe2d8", borderRadius: 8, color: "#624b3d", fontSize: 11, overflowWrap: "anywhere" }}><span>{new Date(entry.created_at).toLocaleString()}</span><strong>{entry.actor_name}</strong><span>{entry.action} {entry.resource} · {entry.status_code}</span><span>IP: {entry.ip_address || "Unavailable"}</span></div>)}</div> : !activityError && <p style={{ color: "#806b5e", fontSize: 12, marginTop: 14 }}>No recorded activity yet.</p>}
+        {activityLogs.length ? <div style={{ display: "grid", gap: 7, marginTop: 14 }}>{activityLogs.map((entry) => <div key={entry.id} style={{ display: "grid", gridTemplateColumns: "minmax(130px, 1.2fr) minmax(110px, 1fr) minmax(130px, 1.3fr) minmax(90px, .7fr) auto", gap: 10, alignItems: "center", padding: 10, border: "1px solid #efe2d8", borderRadius: 8, color: "#624b3d", fontSize: 11, overflowWrap: "anywhere" }}><span>{new Date(entry.created_at).toLocaleString()}</span><strong>{entry.actor_name}</strong><span>{entry.action} {entry.resource} · {entry.status_code}</span><span>IP: {entry.ip_address || "Unavailable"}</span><button type="button" className="btn btn-outline" disabled={activityBusy} onClick={() => deleteActivityLog(entry)}>Delete</button></div>)}</div> : !activityError && <p style={{ color: "#806b5e", fontSize: 12, marginTop: 14 }}>No recorded activity yet.</p>}
       </details>}
 
       {!committeeOnly && <div className="settings-card">

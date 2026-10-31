@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from jose import JWTError, jwt
 
-from app.routers import auth, verification, roles, notifications, audit, family, community_records, finance, scholarships, assistance, events, matrimonial, marketplace, support
+from app.routers import auth, verification, roles, notifications, audit, family, community_records, finance, scholarships, assistance, events, matrimonial, marketplace, support, emergency
 from app.auth import ALGORITHM, SECRET_KEY
 from app.database import SessionLocal
 from app.models import ActivityLog
@@ -41,6 +41,7 @@ app.include_router(matrimonial.router)
 app.include_router(marketplace.router)
 app.include_router(support.router)
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
+app.include_router(emergency.router)
 
 
 def record_activity(request, status_code: int) -> None:
@@ -78,6 +79,9 @@ def record_activity(request, status_code: int) -> None:
 @app.middleware("http")
 async def audit_mutations(request, call_next):
     if request.method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return await call_next(request)
+    # Deleting audit rows should not create replacement audit rows.
+    if request.url.path.startswith("/admin/audit-logs"):
         return await call_next(request)
     try:
         response = await call_next(request)
