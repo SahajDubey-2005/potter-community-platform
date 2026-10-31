@@ -1,12 +1,17 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from datetime import datetime, timezone
+from pathlib import Path
 from jose import JWTError, jwt
 
 from app.routers import auth, verification, roles, notifications, audit, family, community_records, finance, scholarships, assistance, events, matrimonial, marketplace, support
 from app.auth import ALGORITHM, SECRET_KEY
 from app.database import SessionLocal
 from app.models import ActivityLog
+
+UPLOADS_DIR = Path(__file__).resolve().parents[1] / "uploads"
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(
     title="Potter Community Platform API",
@@ -35,6 +40,7 @@ app.include_router(events.router)
 app.include_router(matrimonial.router)
 app.include_router(marketplace.router)
 app.include_router(support.router)
+app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
 
 def record_activity(request, status_code: int) -> None:

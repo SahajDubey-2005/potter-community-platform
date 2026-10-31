@@ -155,6 +155,89 @@ button {
   gap: 10px;
 }
 
+/* Professional, compact language selector in the top-right header */
+.language-switcher {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 11px;
+  border: 1px solid var(--border, #ead8ca);
+  border-radius: 11px;
+  background: #fffaf5;
+  color: var(--primary, #a65a3a);
+  box-shadow: 0 2px 8px rgba(85, 48, 30, 0.04);
+  transition: border-color .2s ease, box-shadow .2s ease, background .2s ease;
+  flex-shrink: 0;
+}
+
+.language-switcher:focus-within,
+.language-switcher:hover {
+  border-color: var(--primary, #a65a3a);
+  box-shadow: 0 0 0 3px rgba(166, 90, 58, 0.10);
+}
+
+.language-switcher select {
+  max-width: 105px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--dark-brown, #4f2e22);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.language-switcher select option {
+  color: #4f2e22;
+  background: #fffaf5;
+}
+
+.google-translate-hidden {
+  display: none !important;
+}
+
+.goog-te-banner-frame,
+.goog-te-banner-frame.skiptranslate,
+iframe.goog-te-banner-frame,
+.goog-te-balloon-frame,
+#goog-gt-tt,
+.goog-tooltip,
+.goog-tooltip:hover,
+body > .skiptranslate {
+  display: none !important;
+  visibility: hidden !important;
+}
+
+html,
+body { top: 0 !important; position: static !important; }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 700px) {
+  .language-switcher {
+    min-height: 34px;
+    gap: 5px;
+    padding: 0 7px;
+  }
+  .language-switcher select {
+    max-width: 75px;
+    font-size: 10px;
+  }
+}
+
 /* =====================================================
    BUTTONS
 ===================================================== */
@@ -4042,3 +4125,98 @@ button {
     grid-template-columns: 1fr;
   }
 }
+
+
+/* =====================================================
+   MATRIMONIAL PROFILE FORM — refined responsive UI
+   Scoped to the profile creation panel only.
+===================================================== */
+.matrimonial-profile-panel {
+  padding: 26px !important;
+  border: 1px solid #ead5c6 !important;
+  border-radius: 18px !important;
+  background: linear-gradient(135deg, #fffdfa 0%, #fff8f2 62%, #f9ece2 100%) !important;
+  box-shadow: 0 12px 32px rgba(91, 53, 34, 0.055);
+}
+.matrimonial-profile-heading {
+  display: flex; align-items: center; gap: 13px; margin-bottom: 10px;
+}
+.matrimonial-profile-heading-icon {
+  width: 44px; height: 44px; flex: 0 0 44px; display: grid; place-items: center;
+  border-radius: 13px; color: #a95637; background: #f7e5d8; border: 1px solid #efd0bd;
+}
+.matrimonial-section-eyebrow {
+  display: block; margin-bottom: 4px; color: #a95637; font-size: 10px; font-weight: 800;
+  letter-spacing: .12em;
+}
+.matrimonial-profile-panel h2 {
+  margin: 0 !important; color: #4c2b1d !important; font-size: 21px !important;
+  line-height: 1.3; letter-spacing: -.025em;
+}
+.matrimonial-profile-intro {
+  max-width: 900px; margin: 0 0 22px !important; color: #806d61 !important;
+  font-size: 12px !important; line-height: 1.7 !important;
+}
+.matrimonial-status-pill {
+  margin-left: auto; padding: 7px 11px; border: 1px solid #e8d2c1; border-radius: 999px;
+  color: #8d4c32; background: #fff; font-size: 10px; font-weight: 800; white-space: nowrap;
+}
+.matrimonial-profile-form {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 20px;
+  margin: 0; align-items: start;
+}
+.matrimonial-field { display: flex; min-width: 0; flex-direction: column; gap: 7px; }
+.matrimonial-field > span { color: #553728; font-size: 12px; font-weight: 750; }
+.matrimonial-profile-form input,
+.matrimonial-profile-form select,
+.matrimonial-profile-form textarea {
+  width: 100%; min-width: 0; box-sizing: border-box; margin: 0;
+  border: 1px solid #e5cdbd; border-radius: 10px; background: rgba(255,255,255,.92);
+  color: #4e3529; font: inherit; font-size: 13px; transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+}
+.matrimonial-profile-form input, .matrimonial-profile-form select { min-height: 46px; padding: 0 13px; }
+.matrimonial-profile-form textarea { min-height: 112px; padding: 12px 13px; resize: vertical; line-height: 1.55; }
+.matrimonial-profile-form input::placeholder, .matrimonial-profile-form textarea::placeholder { color: #a08c7e; opacity: 1; }
+.matrimonial-profile-form input:focus, .matrimonial-profile-form select:focus, .matrimonial-profile-form textarea:focus {
+  outline: none; border-color: #b55e3c; background: #fff; box-shadow: 0 0 0 3px rgba(181,94,60,.13);
+}
+.matrimonial-field-full { grid-column: 1 / -1; }
+.matrimonial-field small { color: #917b6d; font-size: 10px; line-height: 1.45; }
+.matrimonial-form-footer {
+  grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between;
+  gap: 16px; padding-top: 16px; border-top: 1px solid #eeded2;
+}
+.matrimonial-form-footer > span { display: inline-flex; align-items: center; gap: 7px; color: #7e6a5d; font-size: 11px; line-height: 1.5; }
+.matrimonial-form-footer > span svg { flex: 0 0 auto; color: #4f8a5b; }
+.matrimonial-form-footer .btn { min-height: 45px; display: inline-flex; align-items: center; justify-content: center; gap: 9px; padding: 0 18px; border-radius: 10px; white-space: nowrap; box-shadow: 0 5px 12px rgba(155,78,48,.15); }
+.matrimonial-form-footer .btn:disabled { cursor: wait; opacity: .7; }
+.matrimonial-form-alert { padding: 11px 13px; margin: 0 0 17px !important; border: 1px solid #efc3bd; border-radius: 9px; background: #fff4f2; color: #a33d31 !important; font-size: 12px !important; }
+@media (max-width: 720px) {
+  .matrimonial-profile-panel { padding: 18px !important; }
+  .matrimonial-profile-form { grid-template-columns: minmax(0, 1fr); gap: 15px; }
+  .matrimonial-field-full, .matrimonial-form-footer { grid-column: 1; }
+  .matrimonial-form-footer { align-items: stretch; flex-direction: column; }
+  .matrimonial-form-footer .btn { width: 100%; }
+  .matrimonial-profile-heading { align-items: flex-start; }
+  .matrimonial-profile-panel h2 { font-size: 18px !important; }
+  .matrimonial-status-pill { margin-left: auto; }
+}
+
+
+/* Matrimonial profile photo upload */
+.matrimonial-photo-field { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 18px; border: 1px dashed #dfbda8; border-radius: 14px; background: linear-gradient(135deg, #fffaf6, #fbefe6); }
+.matrimonial-photo-copy { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 7px; }
+.matrimonial-photo-label { color: #553728; font-size: 12px; font-weight: 800; }
+.matrimonial-photo-label small { color: #92796a; font-weight: 500; }
+.matrimonial-photo-copy p { margin: 0; color: #806d61; font-size: 12px; line-height: 1.5; }
+.matrimonial-photo-input { position: absolute; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0 !important; }
+.matrimonial-photo-button { min-height: 38px; display: inline-flex; align-items: center; gap: 8px; padding: 0 13px; border: 1px solid #d8aa91; border-radius: 9px; background: #fff; color: #9f5032; font-size: 12px; font-weight: 750; cursor: pointer; transition: background .18s ease, border-color .18s ease; }
+.matrimonial-photo-button:hover { background: #f9e7dc; border-color: #b55e3c; }
+.matrimonial-photo-input:focus-visible + .matrimonial-photo-button { outline: 3px solid rgba(181,94,60,.22); }
+.matrimonial-photo-preview { width: 104px; flex: 0 0 104px; display: flex; flex-direction: column; align-items: center; gap: 7px; }
+.matrimonial-photo-preview > img { width: 96px; height: 96px; border-radius: 14px; object-fit: cover; border: 2px solid #fff; box-shadow: 0 2px 10px rgba(87,49,31,.12); }
+.matrimonial-photo-placeholder { width: 96px; height: 96px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; border: 1px solid #ead2c2; border-radius: 14px; background: #f8e9df; color: #b16a4c; }
+.matrimonial-photo-placeholder span { font-size: 10px; font-weight: 700; }
+.matrimonial-photo-remove { padding: 3px 6px; border: 0; background: transparent; color: #a33d31; font-size: 10px; cursor: pointer; }
+.matrimonial-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; display: block; }
+@media (max-width: 600px) { .matrimonial-photo-field { align-items: stretch; gap: 14px; padding: 14px; } .matrimonial-photo-preview { width: 88px; flex-basis: 88px; } .matrimonial-photo-preview > img, .matrimonial-photo-placeholder { width: 82px; height: 82px; } }

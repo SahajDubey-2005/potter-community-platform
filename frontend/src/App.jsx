@@ -45,6 +45,9 @@ import {
   ClipboardCheck,
   FileCheck,
   TrendingUp,
+  ImagePlus,
+  UserRound,
+  Languages,
 } from "lucide-react";
 
 // Authentication endpoints must be implemented by your secure backend.
@@ -509,7 +512,139 @@ function normalizeCommunityRole(role) {
   return aliases[value] || Object.keys(ROLE_DASHBOARD_CONFIG).find((name) => name.toLowerCase() === value) || String(role || "General Member").trim();
 }
 
+function LanguageSelector() {
+  const [language, setLanguage] = useState(() => {
+    try { return localStorage.getItem("potterCommunityLanguage") || "en"; }
+    catch { return "en"; }
+  });
+
+  const changeLanguage = (nextLanguage) => {
+    setLanguage(nextLanguage);
+    try { localStorage.setItem("potterCommunityLanguage", nextLanguage); } catch {}
+    // Apply the selected language from a clean page load. Google Translate can
+    // otherwise leave the previous language active after the selector changes.
+    if (typeof window.changePotterCommunityLanguage === "function") {
+      window.changePotterCommunityLanguage(nextLanguage, true);
+    } else {
+      window.location.reload();
+    }
+  };
+
+  return (
+    <div className="language-switcher" title="Choose website language">
+      <Languages size={17} aria-hidden="true" />
+      <label className="sr-only" htmlFor="potter-language-select">Website language</label>
+      <select
+        id="potter-language-select"
+        value={language}
+        onChange={(event) => changeLanguage(event.target.value)}
+        aria-label="Website language"
+      >
+        <option value="en">English</option>
+        <option value="hi">हिन्दी</option>
+        <option value="kn">ಕನ್ನಡ</option>
+      </select>
+      <div id="google_translate_element" className="google-translate-hidden" aria-hidden="true" />
+    </div>
+  );
+}
+
 function App() {
+  useEffect(() => {
+    // Google Translate translates visible page content, including most React-rendered
+    // text. The native selector stays visible; the Google widget stays hidden.
+    const supportedLanguages = new Set(["en", "hi", "kn"]);
+    const getSavedLanguage = () => {
+      try {
+        const saved = localStorage.getItem("potterCommunityLanguage") || "en";
+        return supportedLanguages.has(saved) ? saved : "en";
+      } catch {
+        return "en";
+      }
+    };
+
+    const setTranslateCookie = (languageCode) => {
+      const value = `/en/${languageCode}`;
+      // Replace the host cookie; this is the important cookie on localhost.
+      document.cookie = `googtrans=${value}; path=/; SameSite=Lax`;
+      // Also replace a domain cookie when running on a real multi-label domain.
+      const hostname = window.location.hostname;
+      const hostnameParts = hostname.split(".");
+      if (hostnameParts.length > 1 && hostname !== "localhost" && !/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
+        const rootDomain = hostnameParts.slice(-2).join(".");
+        document.cookie = `googtrans=${value}; path=/; domain=.${rootDomain}; SameSite=Lax`;
+      }
+    };
+
+    window.changePotterCommunityLanguage = (languageCode, reload = false) => {
+      if (!supportedLanguages.has(languageCode)) return;
+      setTranslateCookie(languageCode);
+      if (reload) {
+        // A fresh load makes Google Translate consistently restore English too,
+        // rather than leaving translated text behind in the current DOM.
+        window.location.reload();
+        return;
+      }
+
+      let attempts = 0;
+      const applyLanguage = () => {
+        const combo = document.querySelector(".goog-te-combo");
+        if (combo) {
+          if (combo.value !== languageCode) {
+            combo.value = languageCode;
+            combo.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+          return;
+        }
+        attempts += 1;
+        if (attempts < 60) window.setTimeout(applyLanguage, 250);
+      };
+      applyLanguage();
+    };
+
+    window.googleTranslateElementInit = () => {
+      if (!window.google?.translate?.TranslateElement) return;
+      const container = document.getElementById("google_translate_element");
+      if (!container || container.dataset.initialized === "true") return;
+      container.dataset.initialized = "true";
+      new window.google.translate.TranslateElement({
+        pageLanguage: "en",
+        includedLanguages: "en,hi,kn",
+        autoDisplay: false,
+        multilanguagePage: true,
+        layout: window.google.translate.TranslateElement.InlineLayout.SIMPLE,
+      }, "google_translate_element");
+
+      const savedLanguage = getSavedLanguage();
+      if (savedLanguage !== "en") {
+        setTranslateCookie(savedLanguage);
+        window.setTimeout(() => window.changePotterCommunityLanguage(savedLanguage), 500);
+      }
+    };
+
+    if (!document.querySelector('script[data-potter-google-translate="true"]')) {
+      const script = document.createElement("script");
+      script.src = "https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit";
+      script.async = true;
+      script.dataset.potterGoogleTranslate = "true";
+      script.onerror = () => {
+        console.warn("Google Translate could not load. Check your internet connection or browser extensions.");
+      };
+      document.body.appendChild(script);
+    } else if (window.google?.translate?.TranslateElement) {
+      window.googleTranslateElementInit();
+    }
+
+    // If a component re-renders/remounts, the saved language remains applied.
+    const savedLanguage = getSavedLanguage();
+    // Keep Google Translate's cookie aligned with the user's actual selector value.
+    // Do not reload here; selecting a language explicitly triggers the clean reload.
+    setTranslateCookie(savedLanguage);
+    if (savedLanguage !== "en") {
+      window.setTimeout(() => window.changePotterCommunityLanguage(savedLanguage), 800);
+    }
+  }, []);
+
   const [authenticated, setAuthenticated] = useState(false);
   const [activeRole, setActiveRole] = useState("General Member");
   const [activeUser, setActiveUser] = useState(() => {
@@ -1038,6 +1173,7 @@ function Header({
 
       {!authenticated ? (
         <div className="auth-buttons">
+          <LanguageSelector />
           <button
             className="btn btn-outline"
             onClick={() => navigate("marketplace")}
@@ -1061,6 +1197,7 @@ function Header({
         </div>
       ) : (
         <div className="header-actions">
+          <LanguageSelector />
           <button
             className="header-icon-button"
             onClick={() =>
@@ -1638,6 +1775,8 @@ function MarketplacePage({ authenticated, navigate, search, setSearch, addToCart
   const [productBusy, setProductBusy] = useState(false);
   const [editingProductId, setEditingProductId] = useState(null);
   const [productDraft, setProductDraft] = useState({ name: "", description: "", category: "Home & décor", price: "", image_url: "" });
+  const [productImageFile, setProductImageFile] = useState(null);
+  const [productImagePreview, setProductImagePreview] = useState("");
   const [orders, setOrders] = useState([]);
   const [categoryFilter, setCategoryFilter] = useState("All pottery");
   const [sortOrder, setSortOrder] = useState("newest");
@@ -1674,11 +1813,20 @@ function MarketplacePage({ authenticated, navigate, search, setSearch, addToCart
     setProductBusy(true);
     setMarketNotice("");
     try {
+      let imageUrl = productDraft.image_url.trim() || null;
+      if (productImageFile) {
+        const imageForm = new FormData();
+        imageForm.append("file", productImageFile);
+        const uploadedImage = await authApi("/marketplace/upload-image", { method: "POST", body: imageForm });
+        imageUrl = uploadedImage.image_url;
+      }
       await authApi(editingProductId ? `/marketplace/products/${editingProductId}` : "/marketplace/products", {
         method: editingProductId ? "PATCH" : "POST",
-        body: JSON.stringify({ ...productDraft, price: Number(productDraft.price), image_url: productDraft.image_url.trim() || null }),
+        body: JSON.stringify({ ...productDraft, price: Number(productDraft.price), image_url: imageUrl }),
       });
       setProductDraft({ name: "", description: "", category: "Home & décor", price: "", image_url: "" });
+      setProductImageFile(null);
+      setProductImagePreview("");
       setEditingProductId(null);
       setMarketNotice(editingProductId ? "Listing updated." : "Your listing is now visible in the marketplace.");
       await loadProducts();
@@ -1690,8 +1838,17 @@ function MarketplacePage({ authenticated, navigate, search, setSearch, addToCart
   };
   const editProduct = (product) => {
     setEditingProductId(product.id);
+    setProductImageFile(null);
+    setProductImagePreview(product.image ? resolveProductImage(product.image) : "");
     setProductDraft({ name: product.name, description: product.description, category: product.category, price: String(product.price), image_url: product.image || "" });
     window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  const resolveProductImage = (image) => image && image.startsWith("/") ? `${AUTH_API_BASE}${image}` : image;
+  const resetProductForm = () => {
+    setEditingProductId(null);
+    setProductDraft({ name: "", description: "", category: "Home & décor", price: "", image_url: "" });
+    setProductImageFile(null);
+    setProductImagePreview("");
   };
   const removeProduct = async (product) => {
     if (!window.confirm(`Remove “${product.name}” from the marketplace?`)) return;
@@ -1750,7 +1907,29 @@ function MarketplacePage({ authenticated, navigate, search, setSearch, addToCart
         .market-product{overflow:hidden;border:1px solid #e3d5c7;border-radius:17px;background:#fffdf9;box-shadow:0 6px 18px #3b29180b}.market-product-img{display:flex;align-items:center;justify-content:center;width:100%;height:190px;object-fit:cover;background:linear-gradient(145deg,#f1dfcc,#e2c2a6);color:#9a5237}.market-product-body{padding:16px}.market-product-body h3{margin:8px 0;font-size:15px;color:#382b21}.market-product-body p{color:#786d62;font-size:11px;line-height:1.65}.market-product-bottom{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:13px}.market-product-bottom strong{font-size:15px;color:#88432f}
         .market-cart-bar{position:sticky;bottom:14px;display:flex;align-items:flex-start;justify-content:space-between;gap:15px;flex-wrap:wrap;margin-top:22px;padding:14px 16px;border:1px solid #ddc8b6;border-radius:16px;background:#fffdf7f2;box-shadow:0 12px 30px #3623171c;backdrop-filter:blur(12px)}
         .market-buyer-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;width:100%}.market-buyer-fields input{min-width:0;padding:10px;border:1px solid #ddc9b7;border-radius:9px;font:inherit;font-size:12px}.market-buyer-fields .address{grid-column:1/-1}
-        @media(max-width:650px){.market-public-banner{align-items:flex-start;flex-wrap:wrap;padding:16px}.market-cart-bar{align-items:flex-start;flex-direction:column}.market-cart-bar .btn{width:100%}}
+        .market-sell-section{margin-bottom:20px;padding:20px;border:1px solid #e5d2c1;border-radius:18px;background:linear-gradient(145deg,#fffdf9 0%,#fff8f0 100%);box-shadow:0 8px 24px rgba(80,51,38,.06)}
+        .market-sell-heading{margin:0 0 5px;color:#503326;font-size:18px;font-weight:800;letter-spacing:-.02em}
+        .market-sell-description{margin:0 0 18px;color:#786d62;font-size:12px;line-height:1.6}
+        .market-sell-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+        .market-sell-field{display:flex;flex-direction:column;gap:7px;min-width:0}
+        .market-sell-field label{font-size:11px;font-weight:750;color:#684633}
+        .market-sell-field input,.market-sell-field select,.market-sell-field textarea{width:100%;min-width:0;box-sizing:border-box;padding:12px 13px;border:1px solid #dfcbbb;border-radius:10px;background:#fff;color:#503326;font:inherit;font-size:13px;outline:none;transition:border-color .18s ease,box-shadow .18s ease,background .18s ease}
+        .market-sell-field input,.market-sell-field select{height:44px}
+        .market-sell-field textarea{min-height:104px;resize:vertical;line-height:1.55}
+        .market-sell-field input::placeholder,.market-sell-field textarea::placeholder{color:#a18d7e}
+        .market-sell-field input:focus,.market-sell-field select:focus,.market-sell-field textarea:focus{border-color:#a95338;box-shadow:0 0 0 3px rgba(169,83,56,.12);background:#fffdfb}
+        .market-sell-field-wide{grid-column:1/-1}
+        .market-image-upload{display:flex;align-items:center;gap:14px;min-height:92px;padding:12px;border:1px dashed #d8b7a0;border-radius:12px;background:#fffaf5}
+        .market-image-preview{width:76px;height:76px;flex:0 0 76px;display:flex;align-items:center;justify-content:center;overflow:hidden;border-radius:10px;background:#f2e3d6;color:#9a5237}
+        .market-image-preview img{width:100%;height:100%;object-fit:cover}
+        .market-image-upload-copy{display:flex;flex:1;min-width:0;flex-direction:column;gap:5px}
+        .market-image-upload-copy strong{font-size:12px;color:#503326}
+        .market-image-upload-copy span{font-size:11px;color:#8a7669;line-height:1.45}
+        .market-image-upload-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:4px}
+        .market-image-upload-button{display:inline-flex;align-items:center;gap:7px;padding:8px 11px;border:1px solid #d9b59d;border-radius:9px;background:#fff;color:#88432f;font-size:11px;font-weight:750;cursor:pointer}
+        .market-image-upload-button:hover{background:#f8e9dd}
+        .market-sell-actions{grid-column:1/-1;display:flex;gap:10px;flex-wrap:wrap;padding-top:2px}
+        @media(max-width:650px){.market-public-banner{align-items:flex-start;flex-wrap:wrap;padding:16px}.market-cart-bar{align-items:flex-start;flex-direction:column}.market-cart-bar .btn{width:100%}.market-sell-section{padding:15px}.market-sell-form{grid-template-columns:minmax(0,1fr)}.market-sell-field-wide,.market-sell-actions{grid-column:1}}
       `}</style>
       {marketNotice && <div role="status" style={{ margin: "0 0 16px", padding: "12px 14px", border: "1px solid #e8d2c0", borderRadius: 10, background: "#fff5eb", color: "#704a34", fontSize: 12 }}>{marketNotice}</div>}
       <div className="market-public-head">
@@ -1768,11 +1947,11 @@ function MarketplacePage({ authenticated, navigate, search, setSearch, addToCart
         <span style={{display:"inline-flex",alignItems:"center",gap:8,color:"#786d62",fontSize:11}}><ShoppingCart size={16}/>{cart.length ? `${cart.length} item(s) in cart` : "Browse freely — no membership needed"}</span>
       </div>
       <div className="market-toolbar" style={{ marginTop: -6 }}><span style={{ color: "#786d62", fontSize: 11 }}>{filteredProducts.length} product(s)</span><label style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "#786d62", fontSize: 11 }}>Sort by <select value={sortOrder} onChange={(event) => setSortOrder(event.target.value)} style={{ padding: "9px 12px", border: "1px solid #ddc9b7", borderRadius: 9, background: "#fffdf9", color: "#503326" }}><option value="newest">Newest</option><option value="price-low">Price: low to high</option><option value="price-high">Price: high to low</option></select></label></div>
-      <div className="market-categories">{["All pottery","Home & décor","Planters","Tableware","Traditional craft","Other pottery"].map((category) => <button key={category} className="market-chip" aria-pressed={categoryFilter === category} style={categoryFilter === category ? { background: "#a95338", color: "#fffaf4", borderColor: "#a95338" } : undefined} onClick={() => setCategoryFilter(category)}>{category}</button>)}</div>
-      {canPublish && <section style={{ marginBottom: 20, padding: 16, border: "1px solid #e3d5c7", borderRadius: 16, background: "#fffdf9" }}><h2 style={{ margin: "0 0 6px", color: "#503326", fontSize: 17 }}>{editingProductId ? "Edit marketplace listing" : "Sell your pottery"}</h2><p style={{margin:"0 0 12px",color:"#786d62",fontSize:12}}>Verified community members can add and manage their own products.</p><form onSubmit={saveProduct} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 10 }}><input required minLength={2} maxLength={160} placeholder="Product name" value={productDraft.name} onChange={(e) => setProductDraft({ ...productDraft, name: e.target.value })} /><select value={productDraft.category} onChange={(e) => setProductDraft({ ...productDraft, category: e.target.value })}>{["Home & décor", "Planters", "Tableware", "Traditional craft", "Other pottery"].map((item) => <option key={item}>{item}</option>)}</select><input required type="number" min="0.01" step="0.01" placeholder="Price (₹)" value={productDraft.price} onChange={(e) => setProductDraft({ ...productDraft, price: e.target.value })} /><input type="url" placeholder="Product image URL (optional)" value={productDraft.image_url} onChange={(e) => setProductDraft({ ...productDraft, image_url: e.target.value })} /><textarea required minLength={5} maxLength={2000} placeholder="Describe the item" value={productDraft.description} onChange={(e) => setProductDraft({ ...productDraft, description: e.target.value })} style={{ gridColumn: "1 / -1", minHeight: 74, padding: 10, border: "1px solid #ddc9b7", borderRadius: 9, font: "inherit" }} /><div style={{ gridColumn: "1 / -1", display: "flex", gap: 8, flexWrap: "wrap" }}><button className="btn btn-primary" type="submit" disabled={productBusy}>{productBusy ? "Saving…" : editingProductId ? "Save changes" : "Publish listing"}</button>{editingProductId && <button type="button" className="btn btn-outline" onClick={() => { setEditingProductId(null); setProductDraft({ name: "", description: "", category: "Home & décor", price: "", image_url: "" }); }}>Cancel</button>}</div></form></section>}
+      <div className="market-categories">{["All pottery","Home & décor","Planters","Tableware","Traditional craft","Idols","Marriage","Other pottery"].map((category) => <button key={category} className="market-chip" aria-pressed={categoryFilter === category} style={categoryFilter === category ? { background: "#a95338", color: "#fffaf4", borderColor: "#a95338" } : undefined} onClick={() => setCategoryFilter(category)}>{category}</button>)}</div>
+      {canPublish && <section className="market-sell-section"><h2 className="market-sell-heading">{editingProductId ? "Edit marketplace listing" : "Sell your pottery"}</h2><p className="market-sell-description">Verified community members can add and manage their own products.</p><form className="market-sell-form" onSubmit={saveProduct}><div className="market-sell-field"><label htmlFor="market-product-name">Product name</label><input id="market-product-name" required minLength={2} maxLength={160} placeholder="e.g. Handcrafted terracotta vase" value={productDraft.name} onChange={(e) => setProductDraft({ ...productDraft, name: e.target.value })} /></div><div className="market-sell-field"><label htmlFor="market-product-category">Product type</label><select id="market-product-category" value={productDraft.category} onChange={(e) => setProductDraft({ ...productDraft, category: e.target.value })}>{["Home & décor", "Planters", "Tableware", "Traditional craft", "Idols", "Marriage", "Other pottery"].map((item) => <option key={item}>{item}</option>)}</select></div><div className="market-sell-field"><label htmlFor="market-product-price">Price (₹)</label><input id="market-product-price" required type="number" min="0.01" step="0.01" placeholder="Enter price in rupees" value={productDraft.price} onChange={(e) => setProductDraft({ ...productDraft, price: e.target.value })} /></div><div className="market-sell-field market-sell-field-wide"><label htmlFor="market-product-image-file">Product image <span style={{fontWeight:500,color:"#9a8778"}}>(optional · JPG, PNG, WEBP up to 5 MB)</span></label><div className="market-image-upload"><div className="market-image-preview">{productImagePreview ? <img src={productImagePreview} alt="Selected product preview"/> : <ShoppingBag size={26}/>}</div><div className="market-image-upload-copy"><strong>{productImageFile ? productImageFile.name : productImagePreview ? "Product image selected" : "Add a photo of your pottery"}</strong><span>Choose an image directly from your device. A preview will appear here.</span><div className="market-image-upload-actions"><label className="market-image-upload-button" htmlFor="market-product-image-file"><Plus size={14}/>{productImagePreview ? "Change image" : "Choose image"}</label>{productImagePreview && <button type="button" className="market-image-upload-button" onClick={() => { setProductImageFile(null); setProductImagePreview(""); setProductDraft({ ...productDraft, image_url: "" }); }}>Remove image</button>}</div></div><input id="market-product-image-file" type="file" accept="image/jpeg,image/png,image/webp" style={{display:"none"}} onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; if (!file.type.startsWith("image/") || !["image/jpeg", "image/png", "image/webp"].includes(file.type)) { setMarketNotice("Choose a JPG, PNG, or WEBP image."); event.target.value = ""; return; } if (file.size > 5 * 1024 * 1024) { setMarketNotice("Image must be 5 MB or smaller."); event.target.value = ""; return; } setMarketNotice(""); setProductImageFile(file); setProductImagePreview(URL.createObjectURL(file)); setProductDraft({ ...productDraft, image_url: "" }); }}/></div></div><div className="market-sell-field market-sell-field-wide"><label htmlFor="market-product-description">Product description</label><textarea id="market-product-description" required minLength={5} maxLength={2000} placeholder="Describe the material, size, craftsmanship, and details of your item…" value={productDraft.description} onChange={(e) => setProductDraft({ ...productDraft, description: e.target.value })} /></div><div className="market-sell-actions"><button className="btn btn-primary" type="submit" disabled={productBusy}>{productBusy ? "Saving…" : editingProductId ? "Save changes" : "Publish listing"}</button>{editingProductId && <button type="button" className="btn btn-outline" onClick={resetProductForm}>Cancel</button>}</div></form></section>}
       {loadingProducts && <div className="empty-state">Loading marketplace listings…</div>}
       {filteredProducts.length ? (
-        <div className="product-grid">{filteredProducts.map((product) => <article className="market-product" key={product.id}>{product.image ? <img className="market-product-img" src={product.image} alt={product.name}/> : <div className="market-product-img"><ShoppingBag size={32}/></div>}<div className="market-product-body"><span className="market-kicker">{product.category || "HANDCRAFTED POTTERY"}</span><h3>{product.name}</h3><p>{product.description || "A unique handmade piece crafted with care."}</p><p style={{ margin: "0 0 8px", color: "#806b5e", fontSize: 10 }}>Made by {product.seller_name || "Community artisan"}</p><div className="market-product-bottom"><strong>₹{Number(product.price).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong><button className="btn btn-primary" onClick={() => addToCart(product)}><ShoppingCart size={15}/> Add to cart</button></div>{product.can_manage && <div style={{ display: "flex", gap: 8, marginTop: 10 }}><button type="button" className="btn btn-outline" onClick={() => editProduct(product)}>Edit</button><button type="button" className="btn btn-outline" onClick={() => removeProduct(product)}>Remove</button></div>}</div></article>)}</div>
+        <div className="product-grid">{filteredProducts.map((product) => <article className="market-product" key={product.id}>{product.image ? <img className="market-product-img" src={resolveProductImage(product.image)} alt={product.name}/> : <div className="market-product-img"><ShoppingBag size={32}/></div>}<div className="market-product-body"><span className="market-kicker">{product.category || "HANDCRAFTED POTTERY"}</span><h3>{product.name}</h3><p>{product.description || "A unique handmade piece crafted with care."}</p><p style={{ margin: "0 0 8px", color: "#806b5e", fontSize: 10 }}>Made by {product.seller_name || "Community artisan"}</p><div className="market-product-bottom"><strong>₹{Number(product.price).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong><button className="btn btn-primary" onClick={() => addToCart(product)}><ShoppingCart size={15}/> Add to cart</button></div>{product.can_manage && <div style={{ display: "flex", gap: 8, marginTop: 10 }}><button type="button" className="btn btn-outline" onClick={() => editProduct(product)}>Edit</button><button type="button" className="btn btn-outline" onClick={() => removeProduct(product)}>Remove</button></div>}</div></article>)}</div>
       ) : !loadingProducts ? (
         <div className="market-empty"><div className="market-empty-icon"><ShoppingBag size={34}/></div><span className="market-kicker">THE ARTISAN SHELF</span><h2>{search ? "No matching pottery found" : "Beautiful things are being shaped."}</h2><p>{marketNotice && !products.length ? marketNotice : search ? "Try another keyword or choose All pottery to browse again." : "No pottery has been listed yet. Verified community members can publish the first product."}</p>{search && <button className="btn btn-outline" onClick={() => setSearch("")}>Show all pottery</button>}</div>
       ) : null}
@@ -2305,13 +2484,13 @@ function MatrimonialPage({
   const [matrimonialError, setMatrimonialError] = useState("");
   const [matrimonialBusy, setMatrimonialBusy] = useState(false);
   const canReviewMatrimonial = String(activeUser?.role || "").toUpperCase() === "ADMIN" || activeUser?.permissions?.includes("matrimonial.review");
-  const [matrimonialForm, setMatrimonialForm] = useState({ gender: "", education: "", occupation: "", location: "", marital_status: "", description: "" });
+  const [matrimonialForm, setMatrimonialForm] = useState({ gender: "", education: "", occupation: "", location: "", marital_status: "", description: "", photo_data: "" });
   const loadMatrimonial = async () => {
     const [profilesResult, mineResult, queueResult] = await Promise.allSettled([authApi("/matrimonial"), authApi("/matrimonial/mine"), canReviewMatrimonial ? authApi("/matrimonial/review") : Promise.resolve([])]);
     if (profilesResult.status === "fulfilled") setMatrimonialProfiles(profilesResult.value);
     if (mineResult.status === "fulfilled") {
       const mine = mineResult.value; setMyMatrimonialProfile(mine);
-      if (mine) setMatrimonialForm({ gender: mine.gender, education: mine.education, occupation: mine.occupation, location: mine.location, marital_status: mine.maritalStatus, description: mine.description });
+      if (mine) setMatrimonialForm({ gender: mine.gender, education: mine.education, occupation: mine.occupation, location: mine.location, marital_status: mine.maritalStatus, description: mine.description, photo_data: mine.photoData || "" });
     }
     if (queueResult.status === "fulfilled") setMatrimonialReviewQueue(queueResult.value);
     const errorResult = [profilesResult, mineResult, queueResult].find(result => result.status === "rejected");
@@ -2415,22 +2594,49 @@ function MatrimonialPage({
         )}
       </div>
 
-      {authenticated && <section className="matrimonial-membership-box" style={{ display: "block", marginBottom: 24 }}>
-        <h2>{myMatrimonialProfile ? "Your matrimonial profile" : "Create a matrimonial profile"}</h2>
-        <p>Only verified members aged 18 or above can submit. Profiles appear to verified members after committee approval. Date of birth, phone, exact address and documents stay private.</p>
-        {matrimonialError && <p role="alert">{matrimonialError}</p>}
-        {myMatrimonialProfile && <p>Application status: <strong>{myMatrimonialProfile.status}</strong></p>}
-        <form onSubmit={saveMatrimonialProfile} className="matrimonial-toolbar" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))" }}>
-          <select required value={matrimonialForm.gender} onChange={e => setMatrimonialForm({ ...matrimonialForm, gender: e.target.value })}><option value="">Gender</option><option>Male</option><option>Female</option><option>Other</option></select>
-          <input required maxLength={160} placeholder="Education" value={matrimonialForm.education} onChange={e => setMatrimonialForm({ ...matrimonialForm, education: e.target.value })} />
-          <input required maxLength={160} placeholder="Occupation" value={matrimonialForm.occupation} onChange={e => setMatrimonialForm({ ...matrimonialForm, occupation: e.target.value })} />
-          <input required maxLength={120} placeholder="City or district (no exact address)" value={matrimonialForm.location} onChange={e => setMatrimonialForm({ ...matrimonialForm, location: e.target.value })} />
-          <select required value={matrimonialForm.marital_status} onChange={e => setMatrimonialForm({ ...matrimonialForm, marital_status: e.target.value })}><option value="">Marital status</option><option>Never married</option><option>Widowed</option><option>Divorced</option><option>Other</option></select>
-          <textarea required minLength={10} maxLength={1200} placeholder="Short introduction" value={matrimonialForm.description} onChange={e => setMatrimonialForm({ ...matrimonialForm, description: e.target.value })} />
-          <button className="btn btn-primary" disabled={matrimonialBusy}>{matrimonialBusy ? "Saving…" : "Submit for review"}</button>
+      {authenticated && <section className="matrimonial-membership-box matrimonial-profile-panel" style={{ display: "block", marginBottom: 24 }}>
+        <div className="matrimonial-profile-heading">
+          <div className="matrimonial-profile-heading-icon"><Heart size={20} /></div>
+          <div>
+            <span className="matrimonial-section-eyebrow">YOUR COMMUNITY PROFILE</span>
+            <h2>{myMatrimonialProfile ? "Your matrimonial profile" : "Create a matrimonial profile"}</h2>
+          </div>
+          {myMatrimonialProfile && <span className="matrimonial-status-pill">{myMatrimonialProfile.status}</span>}
+        </div>
+        <p className="matrimonial-profile-intro">Only verified members aged 18 or above can submit. Your profile appears to verified members after committee approval. Date of birth, phone number, exact address and documents remain private.</p>
+        {matrimonialError && <p className="matrimonial-form-alert" role="alert">{matrimonialError}</p>}
+        <form onSubmit={saveMatrimonialProfile} className="matrimonial-profile-form">
+          <label className="matrimonial-field"><span>Gender</span><select required value={matrimonialForm.gender} onChange={e => setMatrimonialForm({ ...matrimonialForm, gender: e.target.value })}><option value="">Select gender</option><option>Male</option><option>Female</option><option>Other</option></select></label>
+          <label className="matrimonial-field"><span>Education</span><input required maxLength={160} placeholder="e.g. Bachelor's degree" value={matrimonialForm.education} onChange={e => setMatrimonialForm({ ...matrimonialForm, education: e.target.value })} /></label>
+          <label className="matrimonial-field"><span>Occupation</span><input required maxLength={160} placeholder="e.g. Potter / Business owner" value={matrimonialForm.occupation} onChange={e => setMatrimonialForm({ ...matrimonialForm, occupation: e.target.value })} /></label>
+          <label className="matrimonial-field"><span>City or district</span><input required maxLength={120} placeholder="City or district (no exact address)" value={matrimonialForm.location} onChange={e => setMatrimonialForm({ ...matrimonialForm, location: e.target.value })} /></label>
+          <label className="matrimonial-field"><span>Marital status</span><select required value={matrimonialForm.marital_status} onChange={e => setMatrimonialForm({ ...matrimonialForm, marital_status: e.target.value })}><option value="">Select status</option><option>Never married</option><option>Widowed</option><option>Divorced</option><option>Other</option></select></label>
+          <div className="matrimonial-photo-field matrimonial-field-full">
+            <div className="matrimonial-photo-copy">
+              <span className="matrimonial-photo-label">Profile photo <small>(optional)</small></span>
+              <p>Add a clear, recent photo so verified members can recognize your profile.</p>
+              <label className="matrimonial-photo-button" htmlFor="matrimonial-profile-photo"><ImagePlus size={16} /> {matrimonialForm.photo_data ? "Change photo" : "Choose photo"}</label>
+              <input id="matrimonial-profile-photo" className="matrimonial-photo-input" type="file" accept="image/png,image/jpeg,image/webp" onChange={async e => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                if (!/^image\/(png|jpeg|webp)$/.test(file.type)) { setMatrimonialError("Choose a JPG, PNG, or WEBP image."); e.target.value = ""; return; }
+                if (file.size > 5 * 1024 * 1024) { setMatrimonialError("Profile photos must be 5 MB or smaller."); e.target.value = ""; return; }
+                const reader = new FileReader();
+                reader.onload = () => { setMatrimonialForm(current => ({ ...current, photo_data: String(reader.result || "") })); setMatrimonialError(""); };
+                reader.onerror = () => setMatrimonialError("The selected photo could not be read. Please try another image.");
+                reader.readAsDataURL(file);
+              }} />
+              <small>JPG, PNG or WEBP · Maximum 5 MB. Your photo is shown only after profile approval.</small>
+            </div>
+            <div className="matrimonial-photo-preview">
+              {matrimonialForm.photo_data ? <><img src={matrimonialForm.photo_data} alt="Matrimonial profile preview" /><button type="button" className="matrimonial-photo-remove" onClick={() => { setMatrimonialForm(current => ({ ...current, photo_data: "" })); const input = document.getElementById("matrimonial-profile-photo"); if (input) input.value = ""; }}>Remove photo</button></> : <div className="matrimonial-photo-placeholder"><UserRound size={30} /><span>Photo preview</span></div>}
+            </div>
+          </div>
+          <label className="matrimonial-field matrimonial-field-full"><span>Short introduction</span><textarea required minLength={10} maxLength={1200} placeholder="Share a little about yourself, your interests and what matters to you…" value={matrimonialForm.description} onChange={e => setMatrimonialForm({ ...matrimonialForm, description: e.target.value })} /><small>Enter at least 10 characters. Please don't include private contact details.</small></label>
+          <div className="matrimonial-form-footer"><span><ShieldCheck size={15} /> Your details are reviewed before the profile is published.</span><button className="btn btn-primary" disabled={matrimonialBusy}>{matrimonialBusy ? "Saving…" : myMatrimonialProfile ? "Update profile for review" : "Submit for review"}<ArrowRight size={16} /></button></div>
         </form>
       </section>}
-      {canReviewMatrimonial && matrimonialReviewQueue.length > 0 && <section className="matrimonial-membership-box" style={{ display: "block", marginBottom: 24 }}><h2>Profiles awaiting review</h2>{matrimonialReviewQueue.map(profile => <article key={profile.id} style={{ padding: 16, borderBottom: "1px solid #ead9cf" }}><strong>{profile.name}, {profile.age}</strong><p>{profile.gender} · {profile.location} · {profile.education} · {profile.occupation} · {profile.maritalStatus}</p><p>{profile.description}</p><button className="btn btn-primary" onClick={() => decideMatrimonialProfile(profile.id, "APPROVE")}>Approve</button> <button className="btn btn-outline" onClick={() => decideMatrimonialProfile(profile.id, "REJECT")}>Reject</button></article>)}</section>}
+      {canReviewMatrimonial && matrimonialReviewQueue.length > 0 && <section className="matrimonial-membership-box" style={{ display: "block", marginBottom: 24 }}><h2>Profiles awaiting review</h2>{matrimonialReviewQueue.map(profile => <article key={profile.id} style={{ padding: 16, borderBottom: "1px solid #ead9cf" }}><strong>{profile.name}, {profile.age}</strong>{profile.photoData && <img src={profile.photoData} alt="Profile awaiting review" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 12, display: "block", margin: "8px 0" }} />}<p>{profile.gender} · {profile.location} · {profile.education} · {profile.occupation} · {profile.maritalStatus}</p><p>{profile.description}</p><button className="btn btn-primary" onClick={() => decideMatrimonialProfile(profile.id, "APPROVE")}>Approve</button> <button className="btn btn-outline" onClick={() => decideMatrimonialProfile(profile.id, "REJECT")}>Reject</button></article>)}</section>}
 
       <div className="matrimonial-toolbar">
         <div className="search-box">
@@ -2575,7 +2781,7 @@ function MatrimonialCard({
   return (
     <div className="matrimonial-card">
       <div className="matrimonial-image">
-        <div className="matrimonial-avatar" aria-label={`${profile.name} profile`}>{profile.name.split(/\s+/).map(part => part[0]).slice(0, 2).join("").toUpperCase()}</div>
+        <div className="matrimonial-avatar" aria-label={`${profile.name} profile`}>{profile.photoData ? <img src={profile.photoData} alt={`${profile.name} profile`} /> : profile.name.split(/\s+/).map(part => part[0]).slice(0, 2).join("").toUpperCase()}</div>
 
         <div className="profile-gender">
           {profile.gender}
@@ -2949,19 +3155,6 @@ function Dashboard({ navigate, activeRole = "General Member", activeUser = null 
         </div>
       </div>
 
-      <div className="role-dashboard-actions" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(175px, 1fr))", gap: 12, margin: "0 0 22px" }}>
-        {dashboardActions.map((action) => (
-          <button
-            key={`${dashboardRole}-${action.page}`}
-            type="button"
-            onClick={() => navigate(action.page)}
-            style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, textAlign: "left", padding: "15px 16px", border: "1px solid #ead8c9", borderRadius: 13, background: "#fffdf9", color: "#503527", cursor: "pointer", fontWeight: 750, fontSize: 12 }}
-          >
-            <span>{action.label}</span><ArrowRight size={15} />
-          </button>
-        ))}
-      </div>
-
       <MyCommitteeElectionProof />
 
       <div className="dashboard-stats">
@@ -3090,54 +3283,6 @@ function Dashboard({ navigate, activeRole = "General Member", activeUser = null 
         </div>
       </div>
 
-      <div className="quick-actions">
-        <h2>Quick Access</h2>
-
-        <div className="quick-grid">
-          <QuickAction
-            icon={ShoppingBag}
-            title="Marketplace"
-            description="Buy & sell"
-            onClick={() =>
-              navigate("marketplace")
-            }
-          />
-
-          <QuickAction
-            icon={Landmark}
-            title="Government Schemes"
-            description="Find benefits"
-            onClick={() =>
-              navigate("schemes")
-            }
-          />
-
-          <QuickAction
-            icon={IndianRupee}
-            title="Widow Pension & Assistance"
-            description="Pension and financial support"
-            onClick={() => navigate("widow-assistance")}
-          />
-
-          <QuickAction
-            icon={GraduationCap}
-            title="Scholarships"
-            description="Education support"
-            onClick={() =>
-              navigate("scholarships")
-            }
-          />
-
-          <QuickAction
-            icon={Heart}
-            title="Matrimonial"
-            description="Find your match"
-            onClick={() =>
-              navigate("matrimonial")
-            }
-          />
-        </div>
-      </div>
     </PageWrapper>
   );
 }
@@ -5258,6 +5403,8 @@ function ProfilePage() {
   const [profile, setProfile] = useState(getStoredProfile);
   const [editing, setEditing] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [memberCardActionsOpen, setMemberCardActionsOpen] = useState(false);
+  const [memberCardPreviewOpen, setMemberCardPreviewOpen] = useState(false);
   const [photoEditorOpen, setPhotoEditorOpen] = useState(false);
   const [photoDraft, setPhotoDraft] = useState("");
   const [photoDraftZoom, setPhotoDraftZoom] = useState(1);
@@ -5740,22 +5887,55 @@ function ProfilePage() {
             <p style={{ margin: 0, color: "#806b5e", fontSize: 12 }}>Your QR code contains only your membership ID.</p>
           </div>
           {membershipStatus === "APPROVED" && profile.membershipId ? <>
-            <style>{`@media print { body * { visibility: hidden !important; } #potter-membership-card, #potter-membership-card * { visibility: visible !important; } #potter-membership-card { position: fixed !important; left: 0 !important; top: 0 !important; width: 100% !important; margin: 0 !important; border: 0 !important; box-shadow: none !important; } .potter-membership-print-action { display: none !important; } }`}</style>
-            <div id="potter-membership-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 18, flexWrap: "wrap", maxWidth: 620, padding: 22, border: "1px solid #d9b49e", borderRadius: 16, background: "linear-gradient(125deg, #fff8f1 0%, #f3dfd0 100%)", boxShadow: "0 8px 24px rgba(80, 51, 38, .08)" }}>
-              <div style={{ minWidth: 210, flex: "1 1 250px" }}>
-                <div style={{ color: "#a95736", fontSize: 10, fontWeight: 900, letterSpacing: ".14em" }}>POTTER COMMUNITY</div>
-                <h3 style={{ margin: "12px 0 4px", color: "#503326", fontSize: 21 }}>{profile.fullName || "Community Member"}</h3>
-                <div style={{ color: "#6f5b4e", fontSize: 12 }}>{profile.role || "Member"}</div>
-                <div style={{ marginTop: 16, color: "#806b5e", fontSize: 10, fontWeight: 700, letterSpacing: ".08em" }}>MEMBERSHIP ID</div>
-                <strong style={{ display: "block", marginTop: 3, color: "#a95736", fontSize: 15 }}>{profile.membershipId}</strong>
-                <div style={{ marginTop: 10, color: "#4c7043", fontSize: 11, fontWeight: 800 }}>✓ VERIFIED MEMBER</div>
+            <style>{`
+              @page { size: landscape; margin: 0; }
+              @media print {
+                html, body, #root { width: 100% !important; height: 100% !important; margin: 0 !important; padding: 0 !important; background: #fff !important; overflow: hidden !important; }
+                body * { visibility: hidden !important; }
+                #potter-membership-card, #potter-membership-card * { visibility: visible !important; }
+                #potter-membership-card { position: fixed !important; inset: 0 !important; display: flex !important; flex-wrap: nowrap !important; align-items: center !important; justify-content: space-between !important; gap: 12mm !important; width: 100vw !important; height: 100vh !important; min-height: 0 !important; max-width: none !important; box-sizing: border-box !important; margin: 0 !important; padding: 18mm 22mm !important; overflow: hidden !important; border: 3px solid #c58c6d !important; border-radius: 0 !important; box-shadow: none !important; background: linear-gradient(125deg, #fffaf5 0%, #f1d7c5 100%) !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; break-inside: avoid !important; page-break-inside: avoid !important; }
+                #potter-membership-card .member-card-print-details { min-width: 0 !important; flex: 1 1 auto !important; }
+                #potter-membership-card .member-card-print-qr { flex: 0 0 62mm !important; width: 62mm !important; padding: 5mm !important; border-radius: 4mm !important; align-self: center !important; }
+                #potter-membership-card .member-card-print-qr svg { width: 50mm !important; height: 50mm !important; }
+                #potter-membership-card .member-card-brand { font-size: 18pt !important; }
+                #potter-membership-card .member-card-name { font-size: 34pt !important; margin-top: 12mm !important; }
+                #potter-membership-card .member-card-role { font-size: 18pt !important; }
+                #potter-membership-card .member-card-id-label { font-size: 13pt !important; margin-top: 12mm !important; }
+                #potter-membership-card .member-card-id { font-size: 24pt !important; }
+                #potter-membership-card .member-card-status { font-size: 15pt !important; margin-top: 8mm !important; }
+                #potter-membership-card .member-card-tagline { font-size: 12pt !important; margin-top: 6mm !important; }
+                #potter-membership-card .member-card-print-qr-label { font-size: 11pt !important; }
+                .potter-membership-print-action, [role='dialog'] { display: none !important; }
+              }
+            `}</style>
+            <div id="potter-membership-card" style={{ position: "relative", display: "flex", justifyContent: "space-between", alignItems: "stretch", gap: 18, flexWrap: "nowrap", width: "min(100%, 620px)", minHeight: 230, boxSizing: "border-box", padding: 22, border: "1px solid #d9b49e", borderRadius: 16, background: "linear-gradient(125deg, #fffaf5 0%, #f3dfd0 100%)", boxShadow: "0 8px 24px rgba(80, 51, 38, .08)", overflow: "hidden" }}>
+              <div aria-hidden="true" style={{ position: "absolute", right: -28, top: -45, width: 160, height: 160, borderRadius: "50%", border: "1px solid rgba(169,87,54,.16)", pointerEvents: "none" }} />
+              <div className="member-card-print-details" style={{ position: "relative", minWidth: 0, flex: "1 1 auto", display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ display: "inline-flex", width: 25, height: 25, alignItems: "center", justifyContent: "center", borderRadius: 7, background: "#f0d8c8", color: "#a95736", fontWeight: 900, fontSize: 13 }}>P</span>
+                  <div className="member-card-brand" style={{ color: "#a95736", fontSize: 10, fontWeight: 900, letterSpacing: ".14em" }}>POTTER COMMUNITY</div>
+                </div>
+                <h3 className="member-card-name" style={{ margin: "12px 0 4px", color: "#503326", fontSize: 21, lineHeight: 1.15, overflowWrap: "anywhere" }}>{profile.fullName || "Community Member"}</h3>
+                <div className="member-card-role" style={{ color: "#6f5b4e", fontSize: 12 }}>{profile.role || "Member"}</div>
+                <div className="member-card-id-label" style={{ marginTop: 16, color: "#806b5e", fontSize: 10, fontWeight: 800, letterSpacing: ".08em" }}>MEMBERSHIP ID</div>
+                <strong className="member-card-id" style={{ display: "block", marginTop: 3, color: "#a95736", fontSize: 15, overflowWrap: "anywhere" }}>{profile.membershipId}</strong>
+                <div className="member-card-status" style={{ display: "inline-flex", alignItems: "center", gap: 4, marginTop: 10, color: "#386a3c", fontSize: 11, fontWeight: 900 }}>✓ VERIFIED MEMBER</div>
+                <div className="member-card-tagline" style={{ marginTop: 7, color: "#806b5e", fontSize: 9 }}>Craft • Community • Tradition</div>
               </div>
-              <div style={{ padding: 10, borderRadius: 10, background: "white", textAlign: "center" }}>
-                <QRCodeSVG value={profile.membershipId} size={128} level="M" title={`Membership ID ${profile.membershipId}`} />
-                <div style={{ marginTop: 4, color: "#806b5e", fontSize: 9 }}>Scan membership ID</div>
+              <div className="member-card-print-qr" style={{ position: "relative", flex: "0 0 142px", alignSelf: "center", padding: 10, border: "1px solid #f0dfd3", borderRadius: 12, background: "white", textAlign: "center", boxSizing: "border-box" }}>
+                <QRCodeSVG value={profile.membershipId} size={120} level="M" title={`Membership ID ${profile.membershipId}`} />
+                <div className="member-card-print-qr-label" style={{ marginTop: 4, color: "#806b5e", fontSize: 9, fontWeight: 700 }}>SCAN TO VERIFY ID</div>
               </div>
             </div>
-            <button type="button" className="btn btn-outline potter-membership-print-action" onClick={() => window.print()} style={{ marginTop: 12 }}>Print member card</button>
+            <button
+              type="button"
+              className="btn btn-primary potter-membership-print-action"
+              onClick={() => window.setTimeout(() => window.print(), 50)}
+              style={{ marginTop: 12 }}
+            >
+              Print member card
+            </button>
+
           </> : <p style={{ margin: 0, padding: 13, borderRadius: 10, background: "#fff8f2", color: "#806b5e", fontSize: 12 }}>{membershipStatus === "APPROVED" ? "A member card and QR code will be available when your membership ID is assigned." : "A member card and QR code will be available after membership approval."}</p>}
         </section>
 
@@ -5821,7 +6001,7 @@ function FamilyMembersPanel() {
       <div style={{ marginBottom: 15 }}><span style={{ color: "#a95736", fontSize: 10, fontWeight: 800, letterSpacing: ".12em" }}>HOUSEHOLD</span><h2 style={{ margin: "5px 0", color: "#503326", fontSize: 19 }}>Family members</h2><p style={{ margin: 0, color: "#806b5e", fontSize: 12 }}>Each family member has an independent verification status and membership record.</p></div>
       <form onSubmit={addFamilyMember} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10, padding: 14, border: "1px solid #f0e2d8", borderRadius: 11 }}>
         <input name="full_name" required minLength={2} maxLength={160} placeholder="Full name" aria-label="Family member full name" style={{ padding: 10, border: "1px solid #ddc9b7", borderRadius: 8, color: "#503326" }} />
-        <select name="relationship" required defaultValue="" aria-label="Relationship" style={{ padding: 10, border: "1px solid #ddc9b7", borderRadius: 8, color: "#503326", background: "#fffdfb" }}><option value="" disabled>Relationship</option>{["Spouse", "Child", "Parent", "Sibling", "Other"].map((item) => <option key={item}>{item}</option>)}</select>
+        <select name="relationship" required defaultValue="" aria-label="Relationship" style={{ padding: 10, border: "1px solid #ddc9b7", borderRadius: 8, color: "#503326", background: "#fffdfb" }}><option value="" disabled>Relationship</option>{["Spouse", "Child", "Parent", "Other"].map((item) => <option key={item}>{item}</option>)}</select>
         <input name="date_of_birth" type="date" aria-label="Date of birth" style={{ padding: 10, border: "1px solid #ddc9b7", borderRadius: 8, color: "#503326" }} />
         <select name="gender" defaultValue="" aria-label="Gender" style={{ padding: 10, border: "1px solid #ddc9b7", borderRadius: 8, color: "#503326", background: "#fffdfb" }}><option value="">Gender (optional)</option>{["Female", "Male", "Non-binary", "Prefer not to say"].map((item) => <option key={item}>{item}</option>)}</select>
         <input name="phone_number" type="tel" maxLength={20} placeholder="Phone (optional)" aria-label="Family member phone" style={{ padding: 10, border: "1px solid #ddc9b7", borderRadius: 8, color: "#503326" }} />

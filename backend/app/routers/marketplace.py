@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -12,6 +14,10 @@ from app.models import MarketplaceOrder, MarketplaceProduct, User
 
 
 router = APIRouter(prefix="/marketplace", tags=["Marketplace"])
+MARKETPLACE_UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads" / "marketplace"
+MARKETPLACE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+MAX_MARKETPLACE_IMAGE_BYTES = 5 * 1024 * 1024
+ALLOWED_MARKETPLACE_IMAGE_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 optional_bearer = HTTPBearer(auto_error=False)
 
 
@@ -77,6 +83,27 @@ def _order_out(order: MarketplaceOrder) -> dict:
         "status": order.status,
         "created_at": order.created_at.isoformat(),
     }
+
+
+@router.post("/upload-image")
+async def upload_product_image(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    if not _is_verified_member(current_user):
+        raise HTTPException(status_code=403, detail="Only verified community members can upload marketplace images")
+    extension = ALLOWED_MARKETPLACE_IMAGE_TYPES.get(file.content_type or "")
+    if not extension:
+        raise HTTPException(status_code=415, detail="Choose a JPG, PNG, or WEBP image")
+    content = await file.read(MAX_MARKETPLACE_IMAGE_BYTES + 1)
+    if not content:
+        raise HTTPException(status_code=400, detail="The selected image is empty")
+    if len(content) > MAX_MARKETPLACE_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Image must be 5 MB or smaller")
+    filename = f"{uuid4().hex}{extension}"
+    destination = MARKETPLACE_UPLOAD_DIR / filename
+    destination.write_bytes(content)
+    return {"image_url": f"/uploads/marketplace/{filename}"}
 
 
 @router.get("/products")

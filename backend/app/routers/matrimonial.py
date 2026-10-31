@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user, user_has_any_permission
@@ -19,6 +19,21 @@ class ProfileInput(BaseModel):
     location: str = Field(min_length=2, max_length=120)
     marital_status: Literal["Never married", "Widowed", "Divorced", "Other"]
     description: str = Field(min_length=10, max_length=1200)
+    photo_data: str | None = Field(default=None, max_length=7_100_000)
+
+    @field_validator("photo_data")
+    @classmethod
+    def validate_photo_data(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        allowed_prefixes = (
+            "data:image/jpeg;base64,",
+            "data:image/png;base64,",
+            "data:image/webp;base64,",
+        )
+        if not value.startswith(allowed_prefixes):
+            raise ValueError("Profile photo must be a JPG, PNG, or WEBP image.")
+        return value
 
 
 class DecisionInput(BaseModel):
@@ -50,6 +65,7 @@ def _serialize(profile: MatrimonialProfile, user: User) -> dict:
             "age": profile.age, "gender": profile.gender, "education": profile.education,
             "occupation": profile.occupation, "location": profile.location,
             "maritalStatus": profile.marital_status, "description": profile.description,
+            "photoData": profile.photo_data,
             "status": profile.status, "createdAt": profile.created_at.isoformat()}
 
 
