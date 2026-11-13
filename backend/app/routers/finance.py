@@ -1,7 +1,13 @@
 from datetime import datetime, timezone
+import time
 from decimal import Decimal
+import hashlib
+import hmac
+import os
 import secrets
 import string
+
+import httpx
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
@@ -15,6 +21,7 @@ from app.notifications import create_notification
 
 
 router = APIRouter(prefix="/finance", tags=["Treasurer finance"])
+payments_router = APIRouter(prefix="/api/payments", tags=["Razorpay payments"])
 PAYMENT_TYPES = {"membership-registration", "membership-renewal", "marketplace-order", "donation", "event-fee"}
 
 
@@ -41,6 +48,286 @@ class RefundDecision(BaseModel):
     decision: str
     remark: str | None = Field(default=None, max_length=1000)
 
+
+class RazorpayOrderInput(BaseModel):
+    paymentType: str
+    amount: Decimal = Field(gt=0, le=99999999)
+    payerName: str = Field(min_length=2, max_length=160)
+    payerEmail: EmailStr | None = None
+
+
+class RazorpayVerificationInput(BaseModel):
+    razorpay_order_id: str = Field(min_length=5, max_length=100)
+    razorpay_payment_id: str = Field(min_length=5, max_length=100)
+    razorpay_signature: str = Field(min_length=20, max_length=256)
+
+
+class RazorpayUpiQrInput(BaseModel):
+    paymentType: str
+    amount: Decimal = Field(gt=0, le=99999999)
+    payerName: str = Field(min_length=2, max_length=160)
+    payerEmail: EmailStr | None = None
+
+
+def _razorpay_config():
+    key_id = os.getenv("RAZORPAY_KEY_ID", "").strip()
+    key_secret = os.getenv("RAZORPAY_KEY_SECRET", "").strip()
+    test_mode = os.getenv("RAZORPAY_TEST_MODE", "true").strip().lower() in {"1", "true", "yes", "on"}
+    if not key_id or not key_secret:
+        raise HTTPException(status_code=503, detail="Razorpay is not configured. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET to the backend environment.")
+    if test_mode and not key_id.startswith("rzp_test_"):
+        raise HTTPException(status_code=503, detail="Razorpay test mode is enabled, but the configured key is not a test key. Use an rzp_test_ key ID.")
+    if not test_mode and key_id.startswith("rzp_test_"):
+        raise HTTPException(status_code=503, detail="Live mode is selected but a Razorpay test key is configured.")
+    return key_id, key_secret, test_mode
+
+
+def _razorpay_request(method: str, path: str, key_id: str, key_secret: str, payload: dict | None = None):
+    try:
+        response = httpx.request(
+            method,
+            f"https://api.razorpay.com/v1{path}",
+            auth=(key_id, key_secret),
+            json=payload,
+            timeout=20.0,
+        )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail="Could not connect to Razorpay. Please retry in a moment.")
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    if response.is_error:
+        description = body.get("error", {}).get("description") if isinstance(body, dict) else None
+        raise HTTPException(status_code=502, detail=description or "Razorpay could not process the request.")
+    return body
+
+
+@payments_router.post("/create-order")
+def create_razorpay_order(
+    data: RazorpayOrderInput,
+    current_user: User = Depends(get_current_user),
+):
+    payment_type = data.paymentType.strip()
+    if payment_type not in PAYMENT_TYPES:
+        raise HTTPException(status_code=422, detail="Select a valid payment type")
+    key_id, key_secret, test_mode = _razorpay_config()
+    amount = int((data.amount * 100).quantize(Decimal("1")))
+    if amount < 100:
+        raise HTTPException(status_code=422, detail="The minimum Razorpay payment amount is ₹1.")
+    order = _razorpay_request("POST", "/orders", key_id, key_secret, {
+        "amount": amount,
+        "currency": "INR",
+        "receipt": f"POT-{secrets.token_hex(8).upper()}",
+        "notes": {
+            "user_id": str(current_user.id),
+            "payment_type": payment_type,
+            "payer_name": data.payerName.strip(),
+            "payer_email": str(data.payerEmail).lower() if data.payerEmail else "",
+            "environment": "test" if test_mode else "live",
+        },
+    })
+    if not order.get("id") or not order.get("amount"):
+        raise HTTPException(status_code=502, detail="Razorpay returned an incomplete order response.")
+    return {
+        "keyId": key_id,
+        "orderId": order["id"],
+        "amount": order["amount"],
+        "currency": order.get("currency", "INR"),
+        "testMode": test_mode,
+    }
+
+
+@payments_router.post("/verify")
+def verify_razorpay_payment(
+    data: RazorpayVerificationInput,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    key_id, key_secret, test_mode = _razorpay_config()
+    signed_payload = f"{data.razorpay_order_id}|{data.razorpay_payment_id}".encode("utf-8")
+    expected_signature = hmac.new(key_secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected_signature, data.razorpay_signature):
+        raise HTTPException(status_code=400, detail="Razorpay payment signature verification failed.")
+
+    order = _razorpay_request("GET", f"/orders/{data.razorpay_order_id}", key_id, key_secret)
+    notes = order.get("notes") or {}
+    if str(notes.get("user_id", "")) != str(current_user.id):
+        raise HTTPException(status_code=403, detail="This payment order does not belong to the signed-in account.")
+
+    payment = _razorpay_request("GET", f"/payments/{data.razorpay_payment_id}", key_id, key_secret)
+    if payment.get("order_id") != data.razorpay_order_id:
+        raise HTTPException(status_code=400, detail="The payment does not match the supplied order.")
+    if payment.get("status") != "captured":
+        raise HTTPException(status_code=409, detail=f"Payment is not captured yet (current status: {payment.get('status', 'unknown')}).")
+    if int(payment.get("amount", 0)) != int(order.get("amount", -1)) or payment.get("currency") != "INR":
+        raise HTTPException(status_code=400, detail="The captured payment amount does not match the order.")
+
+    existing = db.query(FinancialTransaction).filter(
+        FinancialTransaction.transaction_reference == data.razorpay_payment_id
+    ).first()
+    if existing:
+        if existing.user_id != current_user.id:
+            raise HTTPException(status_code=409, detail="This payment is already associated with another account.")
+        row = existing
+    else:
+        now = datetime.now(timezone.utc)
+        amount_rupees = (Decimal(str(payment["amount"])) / Decimal("100")).quantize(Decimal("0.01"))
+        row = FinancialTransaction(
+            public_reference=f"PAY-{now.year}-{secrets.token_hex(4).upper()}",
+            user_id=current_user.id,
+            payment_type=notes.get("payment_type", "donation"),
+            amount=amount_rupees,
+            payer_name=(notes.get("payer_name") or "Community member")[:160],
+            payer_email=(notes.get("payer_email") or None),
+            transaction_reference=data.razorpay_payment_id,
+            source="RAZORPAY_TEST" if test_mode else "RAZORPAY",
+            status="VERIFIED",
+            receipt_number=f"ACK-{now.year}-{secrets.token_hex(3).upper()}",
+            reconciled=False,
+            verified_at=now,
+            created_at=datetime.fromtimestamp(int(payment.get("created_at", now.timestamp())), timezone.utc),
+        )
+        db.add(row)
+        try:
+            db.commit()
+            db.refresh(row)
+        except IntegrityError:
+            db.rollback()
+            row = db.query(FinancialTransaction).filter(
+                FinancialTransaction.transaction_reference == data.razorpay_payment_id,
+                FinancialTransaction.user_id == current_user.id,
+            ).first()
+            if row is None:
+                raise HTTPException(status_code=409, detail="This payment reference has already been recorded.")
+
+    return {
+        "verified": True,
+        "paymentStatus": payment.get("status"),
+        "transactionReference": row.transaction_reference,
+        "recordId": row.public_reference,
+        "amount": float(row.amount),
+        "receiptNumber": row.receipt_number,
+        "paidAt": row.created_at.isoformat(),
+    }
+
+
+
+@payments_router.post("/create-upi-qr")
+def create_razorpay_upi_qr(
+    data: RazorpayUpiQrInput,
+    current_user: User = Depends(get_current_user),
+):
+    """Create a single-use, fixed-amount Razorpay UPI QR for the signed-in user."""
+    payment_type = data.paymentType.strip()
+    if payment_type not in PAYMENT_TYPES:
+        raise HTTPException(status_code=422, detail="Select a valid payment type")
+    key_id, key_secret, test_mode = _razorpay_config()
+    amount = int((data.amount * 100).quantize(Decimal("1")))
+    if amount < 100:
+        raise HTTPException(status_code=422, detail="The minimum Razorpay payment amount is ₹1.")
+    expires_at = int(time.time()) + (15 * 60)
+    qr = _razorpay_request("POST", "/payments/qr_codes", key_id, key_secret, {
+        "type": "upi_qr",
+        "name": "Potter Community",
+        "usage": "single_use",
+        "fixed_amount": True,
+        "payment_amount": amount,
+        "description": f"Potter Community - {payment_type}"[:255],
+        "close_by": expires_at,
+        "notes": {
+            "user_id": str(current_user.id),
+            "payment_type": payment_type,
+            "payer_name": data.payerName.strip(),
+            "payer_email": str(data.payerEmail).lower() if data.payerEmail else "",
+            "environment": "test" if test_mode else "live",
+        },
+    })
+    if not qr.get("id") or not qr.get("image_url"):
+        raise HTTPException(status_code=502, detail="Razorpay did not return a QR image. Check QR Code API access in your Razorpay account.")
+    return {
+        "qrCodeId": qr["id"],
+        "imageUrl": qr["image_url"],
+        "amount": float(data.amount),
+        "currency": qr.get("currency", "INR"),
+        "expiresAt": datetime.fromtimestamp(expires_at, timezone.utc).isoformat(),
+        "testMode": test_mode,
+    }
+
+
+@payments_router.get("/upi-qr/{qr_id}/status")
+def check_razorpay_upi_qr_status(
+    qr_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Check Razorpay's QR payment collection and record only captured payments."""
+    key_id, key_secret, test_mode = _razorpay_config()
+    qr = _razorpay_request("GET", f"/payments/qr_codes/{qr_id}", key_id, key_secret)
+    notes = qr.get("notes") or {}
+    if str(notes.get("user_id", "")) != str(current_user.id):
+        raise HTTPException(status_code=403, detail="This UPI QR does not belong to the signed-in account.")
+
+    collection = _razorpay_request("GET", f"/payments/qr_codes/{qr_id}/payments", key_id, key_secret)
+    items = collection.get("items") or []
+    captured = next((item for item in items if item.get("status") == "captured" and item.get("captured") is True), None)
+    if captured is None:
+        return {"verified": False, "paymentStatus": "pending", "message": "No captured payment has been received for this QR yet."}
+
+    expected_amount = int(qr.get("payment_amount") or 0)
+    if int(captured.get("amount", -1)) != expected_amount or captured.get("currency") != "INR":
+        raise HTTPException(status_code=400, detail="The captured UPI payment amount does not match this QR code.")
+
+    payment_id = captured.get("id")
+    if not payment_id:
+        raise HTTPException(status_code=502, detail="Razorpay returned a captured QR payment without a payment ID.")
+    existing = db.query(FinancialTransaction).filter(
+        FinancialTransaction.transaction_reference == payment_id
+    ).first()
+    if existing:
+        if existing.user_id != current_user.id:
+            raise HTTPException(status_code=409, detail="This payment is already associated with another account.")
+        row = existing
+    else:
+        now = datetime.now(timezone.utc)
+        amount_rupees = (Decimal(str(captured["amount"])) / Decimal("100")).quantize(Decimal("0.01"))
+        row = FinancialTransaction(
+            public_reference=f"PAY-{now.year}-{secrets.token_hex(4).upper()}",
+            user_id=current_user.id,
+            payment_type=notes.get("payment_type", "donation"),
+            amount=amount_rupees,
+            payer_name=(notes.get("payer_name") or "Community member")[:160],
+            payer_email=(notes.get("payer_email") or None),
+            transaction_reference=payment_id,
+            source="RAZORPAY_TEST_UPI_QR" if test_mode else "RAZORPAY_UPI_QR",
+            status="VERIFIED",
+            receipt_number=f"ACK-{now.year}-{secrets.token_hex(3).upper()}",
+            reconciled=False,
+            verified_at=now,
+            created_at=datetime.fromtimestamp(int(captured.get("created_at", now.timestamp())), timezone.utc),
+        )
+        db.add(row)
+        try:
+            db.commit()
+            db.refresh(row)
+        except IntegrityError:
+            db.rollback()
+            row = db.query(FinancialTransaction).filter(
+                FinancialTransaction.transaction_reference == payment_id,
+                FinancialTransaction.user_id == current_user.id,
+            ).first()
+            if row is None:
+                raise HTTPException(status_code=409, detail="This QR payment has already been recorded.")
+
+    return {
+        "verified": True,
+        "paymentStatus": "captured",
+        "transactionReference": row.transaction_reference,
+        "recordId": row.public_reference,
+        "amount": float(row.amount),
+        "receiptNumber": row.receipt_number,
+        "paidAt": row.created_at.isoformat(),
+    }
 
 def _policy(db: Session) -> FinancePolicy:
     policy = db.query(FinancePolicy).filter(FinancePolicy.id == 1).first()

@@ -30,3 +30,5 @@ __pycache__/
 .env
 backend/uploads/*
 !backend/uploads/.gitkeep
+
+backend/secrets/firebase-service-account.json.json

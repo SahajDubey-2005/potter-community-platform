@@ -155,89 +155,6 @@ button {
   gap: 10px;
 }
 
-/* Professional, compact language selector in the top-right header */
-.language-switcher {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 38px;
-  padding: 0 11px;
-  border: 1px solid var(--border, #ead8ca);
-  border-radius: 11px;
-  background: #fffaf5;
-  color: var(--primary, #a65a3a);
-  box-shadow: 0 2px 8px rgba(85, 48, 30, 0.04);
-  transition: border-color .2s ease, box-shadow .2s ease, background .2s ease;
-  flex-shrink: 0;
-}
-
-.language-switcher:focus-within,
-.language-switcher:hover {
-  border-color: var(--primary, #a65a3a);
-  box-shadow: 0 0 0 3px rgba(166, 90, 58, 0.10);
-}
-
-.language-switcher select {
-  max-width: 105px;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--dark-brown, #4f2e22);
-  font: inherit;
-  font-size: 11px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.language-switcher select option {
-  color: #4f2e22;
-  background: #fffaf5;
-}
-
-.google-translate-hidden {
-  display: none !important;
-}
-
-.goog-te-banner-frame,
-.goog-te-banner-frame.skiptranslate,
-iframe.goog-te-banner-frame,
-.goog-te-balloon-frame,
-#goog-gt-tt,
-.goog-tooltip,
-.goog-tooltip:hover,
-body > .skiptranslate {
-  display: none !important;
-  visibility: hidden !important;
-}
-
-html,
-body { top: 0 !important; position: static !important; }
-
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-@media (max-width: 700px) {
-  .language-switcher {
-    min-height: 34px;
-    gap: 5px;
-    padding: 0 7px;
-  }
-  .language-switcher select {
-    max-width: 75px;
-    font-size: 10px;
-  }
-}
-
 /* =====================================================
    BUTTONS
 ===================================================== */
@@ -1843,7 +1760,6 @@ body { top: 0 !important; position: static !important; }
 }
 
 .emergency-main-card select,
-.emergency-main-card input,
 .emergency-main-card textarea {
   width: 100%;
 
@@ -1860,14 +1776,6 @@ body { top: 0 !important; position: static !important; }
   margin-bottom: 10px;
 
   background: white;
-}
-
-.emergency-main-card label {
-  display: block;
-  color: var(--dark-brown);
-  font-size: 11px;
-  font-weight: 700;
-  margin: 4px 0 6px;
 }
 
 .emergency-main-card textarea {
@@ -4229,3 +4137,87 @@ body { top: 0 !important; position: static !important; }
 .matrimonial-photo-remove { padding: 3px 6px; border: 0; background: transparent; color: #a33d31; font-size: 10px; cursor: pointer; }
 .matrimonial-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; display: block; }
 @media (max-width: 600px) { .matrimonial-photo-field { align-items: stretch; gap: 14px; padding: 14px; } .matrimonial-photo-preview { width: 88px; flex-basis: 88px; } .matrimonial-photo-preview > img, .matrimonial-photo-placeholder { width: 82px; height: 82px; } }
+
+/* Matrimonial discovery enhancements */
+.matrimonial-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(35, 20, 14, .62);
+  backdrop-filter: blur(5px);
+}
+.matrimonial-detail-modal {
+  position: relative;
+  width: min(560px, 100%);
+  max-height: min(85vh, 760px);
+  overflow: auto;
+  padding: 28px;
+  border: 1px solid #ead3c4;
+  border-radius: 20px;
+  background: #fffaf6;
+  color: #3d251b;
+  box-shadow: 0 24px 80px rgba(28, 13, 8, .28);
+}
+.matrimonial-modal-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  width: 36px;
+  height: 36px;
+  border: 1px solid #ead3c4;
+  border-radius: 50%;
+  background: white;
+  color: #75412d;
+  font-size: 25px;
+  cursor: pointer;
+}
+.matrimonial-modal-heading {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding-right: 32px;
+  margin-bottom: 20px;
+}
+.matrimonial-modal-heading .matrimonial-avatar {
+  width: 84px;
+  height: 84px;
+  flex: 0 0 84px;
+  overflow: hidden;
+  border-radius: 16px;
+}
+.matrimonial-modal-heading h2 { margin: 0 0 5px; }
+.matrimonial-modal-heading p, .matrimonial-detail-modal > p { color: #76645a; line-height: 1.6; }
+.matrimonial-modal-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 18px;
+  padding: 16px;
+  border-radius: 12px;
+  background: #f7ece4;
+}
+.matrimonial-modal-facts p { margin: 0; font-size: 13px; line-height: 1.6; }
+.matrimonial-detail-modal > small { color: #8a7569; }
+.matrimonial-modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
+.matrimonial-toolbar { flex-wrap: wrap; }
+.matrimonial-toolbar .search-box { min-width: 220px; }
+@media (max-width: 700px) {
+  .matrimonial-modal-facts { grid-template-columns: 1fr; }
+  .matrimonial-detail-modal { padding: 22px 18px; }
+  .matrimonial-modal-actions { flex-direction: column; }
+  .matrimonial-modal-actions .btn { width: 100%; }
+}
+
+
+/* Matrimonial profile cards: show the complete portrait and keep the face in frame. */
+.matrimonial-image .matrimonial-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center center;
+  background: #f4e5dc;
+  border-radius: 0;
+}

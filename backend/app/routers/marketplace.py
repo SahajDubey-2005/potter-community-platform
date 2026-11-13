@@ -193,7 +193,7 @@ def place_order(data: OrderInput, current_user: User | None = Depends(optional_c
         quantity = quantities[product.id]
         price = Decimal(product.price)
         total += price * quantity
-        item_snapshot.append({"product_id": product.id, "name": product.name, "quantity": quantity, "unit_price": float(price), "seller_id": product.seller_id})
+        item_snapshot.append({"product_id": product.id, "name": product.name, "quantity": quantity, "unit_price": float(price), "seller_id": product.seller_id, "status": "REQUESTED", "status_history": [{"status": "REQUESTED", "at": datetime.now(timezone.utc).isoformat()}]})
     order = MarketplaceOrder(
         user_id=current_user.id if current_user else None,
         buyer_name=data.buyer_name.strip(),
@@ -235,3 +235,59 @@ def list_seller_orders(current_user: User = Depends(get_current_user), db: Sessi
 def list_orders(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     orders = db.query(MarketplaceOrder).filter(MarketplaceOrder.user_id == current_user.id).order_by(MarketplaceOrder.created_at.desc()).limit(100).all()
     return [_order_out(order) for order in orders]
+
+
+class OrderStatusInput(BaseModel):
+    status: str = Field(pattern="^(ACCEPTED|PROCESSING|SHIPPED|DELIVERED|CANCELLED)$")
+
+
+@router.patch("/orders/{order_id}/status")
+def update_order_status(
+    order_id: int,
+    data: OrderStatusInput,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    order = db.query(MarketplaceOrder).filter(MarketplaceOrder.id == order_id).first()
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    role_name = current_user.role_record.name if current_user.role_record else current_user.role
+    is_admin = _can_manage(current_user, db) and str(role_name or "").upper() in {"ADMIN", "SUPER ADMIN"}
+    if not is_admin and not _is_verified_member(current_user):
+        raise HTTPException(status_code=403, detail="Only verified sellers can update order status")
+
+    items = [dict(item) for item in (order.items or [])]
+    owned_items = [item for item in items if is_admin or int(item.get("seller_id", -1)) == current_user.id]
+    if not owned_items:
+        raise HTTPException(status_code=403, detail="You are not authorized to update this order")
+
+    now = datetime.now(timezone.utc).isoformat()
+    for item in owned_items:
+        previous = item.get("status") or order.status or "REQUESTED"
+        if previous in {"DELIVERED", "CANCELLED"}:
+            raise HTTPException(status_code=409, detail=f"Order item is already {previous.lower()}")
+        history = list(item.get("status_history") or [])
+        history.append({"status": data.status, "at": now, "updated_by": current_user.id})
+        item["status"] = data.status
+        item["status_history"] = history
+        item["status_updated_at"] = now
+
+    order.items = items
+    statuses = [item.get("status", order.status or "REQUESTED") for item in items]
+    if all(value == "DELIVERED" for value in statuses):
+        order.status = "DELIVERED"
+    elif all(value == "CANCELLED" for value in statuses):
+        order.status = "CANCELLED"
+    elif any(value == "SHIPPED" for value in statuses):
+        order.status = "SHIPPED"
+    elif any(value == "PROCESSING" for value in statuses):
+        order.status = "PROCESSING"
+    elif any(value == "ACCEPTED" for value in statuses):
+        order.status = "ACCEPTED"
+    else:
+        order.status = "REQUESTED"
+
+    db.commit()
+    db.refresh(order)
+    return _order_out(order)

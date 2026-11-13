@@ -142,6 +142,18 @@ class User(Base):
     )
 
 
+class PotteryMemory(Base):
+    """A photo memory uploaded by its owning community profile."""
+    __tablename__ = "pottery_memories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    caption: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    image_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+
 class CommitteeAssignment(Base):
     __tablename__ = "committee_assignments"
 

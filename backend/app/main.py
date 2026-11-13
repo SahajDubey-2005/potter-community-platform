@@ -1,15 +1,35 @@
+from datetime import datetime, timezone
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from datetime import datetime, timezone
-from pathlib import Path
 from jose import JWTError, jwt
 
-from app.routers import auth, verification, roles, notifications, audit, family, community_records, finance, scholarships, assistance, events, matrimonial, marketplace, support, emergency
 from app.auth import ALGORITHM, SECRET_KEY
-from app.database import SessionLocal
-from app.models import ActivityLog
+from app.database import SessionLocal, engine
+from app.models import ActivityLog, PotteryMemory
+from app.routers import community_assistant
+from app.routers import (
+    assistance,
+    audit,
+    auth,
+    community_records,
+    emergency,
+    events,
+    family,
+    finance,
+    marketplace,
+    matrimonial,
+    memories,
+    notifications,
+    roles,
+    scholarships,
+    support,
+    verification,
+)
 
+# Store uploaded files in backend/uploads and expose them through /uploads.
 UPLOADS_DIR = Path(__file__).resolve().parents[1] / "uploads"
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -34,22 +54,38 @@ app.include_router(audit.router)
 app.include_router(family.router)
 app.include_router(community_records.router)
 app.include_router(finance.router)
+app.include_router(finance.payments_router)
 app.include_router(scholarships.router)
 app.include_router(assistance.router)
 app.include_router(events.router)
 app.include_router(matrimonial.router)
+app.include_router(memories.router)
 app.include_router(marketplace.router)
 app.include_router(support.router)
-app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
+# Preserve the emergency endpoints already present on GitHub main.
 app.include_router(emergency.router)
+app.include_router(community_assistant.router)
+
+app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
+
+
+@app.on_event("startup")
+def ensure_pottery_memories_table() -> None:
+    # Create only this newly added table; existing tables are not modified.
+    PotteryMemory.__table__.create(bind=engine, checkfirst=True)
 
 
 def record_activity(request, status_code: int) -> None:
     authorization = request.headers.get("authorization", "")
     actor_id = None
+
     if authorization.lower().startswith("bearer "):
         try:
-            claims = jwt.decode(authorization[7:].strip(), SECRET_KEY, algorithms=[ALGORITHM])
+            claims = jwt.decode(
+                authorization[7:].strip(),
+                SECRET_KEY,
+                algorithms=[ALGORITHM],
+            )
             subject = claims.get("sub")
             if isinstance(subject, str) and subject.isdigit():
                 actor_id = int(subject)
@@ -60,15 +96,18 @@ def record_activity(request, status_code: int) -> None:
     # the deployment explicitly configures a trusted proxy.
     ip_address = request.client.host if request.client else None
     db = SessionLocal()
+
     try:
-        db.add(ActivityLog(
-            actor_user_id=actor_id,
-            action=request.method.upper(),
-            resource=request.url.path[:255],
-            status_code=status_code,
-            ip_address=ip_address[:64] if ip_address else None,
-            created_at=datetime.now(timezone.utc),
-        ))
+        db.add(
+            ActivityLog(
+                actor_user_id=actor_id,
+                action=request.method.upper(),
+                resource=request.url.path[:255],
+                status_code=status_code,
+                ip_address=ip_address[:64] if ip_address else None,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
         db.commit()
     except Exception:
         db.rollback()
@@ -80,16 +119,20 @@ def record_activity(request, status_code: int) -> None:
 async def audit_mutations(request, call_next):
     if request.method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
         return await call_next(request)
+
     # Deleting audit rows should not create replacement audit rows.
     if request.url.path.startswith("/admin/audit-logs"):
         return await call_next(request)
+
     try:
         response = await call_next(request)
     except Exception:
         record_activity(request, 500)
         raise
+
     record_activity(request, response.status_code)
     return response
+
 
 @app.get("/")
 def read_root():
