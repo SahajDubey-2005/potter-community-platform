@@ -1,0 +1,266 @@
+--- a/potter-community-platform/backend/app/models.py
++++ b/potter-community-platform/backend/app/models.py
+@@ -105,8 +105,14 @@
+         nullable=True,
+     )
+ 
+     application_details: Mapped[dict | None] = mapped_column(
++        JSON,
++        nullable=True,
++    )
++
++    # Member-editable profile information; separate from membership application data.
++    profile_details: Mapped[dict | None] = mapped_column(
+         JSON,
+         nullable=True,
+     )
+ 
+--- a/potter-community-platform/backend/app/schemas.py
++++ b/potter-community-platform/backend/app/schemas.py
+@@ -28,8 +28,9 @@
+     is_active: bool
+     membership_status: str = "PENDING"
+     membership_number: str | None = None
+     permissions: list[str] = Field(default_factory=list)
++    profile_details: dict = Field(default_factory=dict)
+ 
+     class Config:
+         from_attributes = True
+ 
+--- a/potter-community-platform/backend/app/routers/auth.py
++++ b/potter-community-platform/backend/app/routers/auth.py
+@@ -1978,14 +1978,69 @@
+         "membership_status": current_user.membership_status,
+ 
+         "membership_number": current_user.membership_number,
+ 
++        "profile_details": current_user.profile_details or {},
++
+     }
+ 
+ 
+ 
+ 
+ 
++
++
++class ProfileDetailsUpdate(BaseModel):
++    profile_details: dict = Field(default_factory=dict)
++
++
++@router.patch("/me/profile", response_model=UserResponse)
++def update_my_profile_details(
++    payload: ProfileDetailsUpdate,
++    current_user: User = Depends(get_current_user),
++    db: Session = Depends(get_db),
++):
++    """Persist editable profile details for the authenticated user only."""
++    allowed_fields = {
++        "dateOfBirth", "gender", "occupation", "artisanStatus", "specialization",
++        "address", "permanentAddress", "correspondenceAddress", "city", "state",
++        "pincode", "bloodGroup", "referralMemberName", "referralMembershipId",
++        "bio", "profilePhoto", "photoZoom", "email", "phone",
++    }
++    incoming = payload.profile_details or {}
++    cleaned = {key: value for key, value in incoming.items() if key in allowed_fields}
++
++    current_details = dict(current_user.profile_details or {})
++    current_details.update(cleaned)
++    current_user.profile_details = current_details
++
++    try:
++        db.commit()
++        db.refresh(current_user)
++    except Exception:
++        db.rollback()
++        raise HTTPException(
++            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
++            detail="Could not save profile details. Please try again.",
++        )
++
++    role_record = current_user.role_record
++    role_permissions = role_record.permissions or [] if role_record is not None else []
++    return {
++        "id": current_user.id,
++        "full_name": current_user.full_name,
++        "phone_number": current_user.phone_number,
++        "email": current_user.email,
++        "role": role_record.name if role_record else current_user.role,
++        "permissions": role_permissions,
++        "is_active": current_user.is_active,
++        "membership_status": current_user.membership_status,
++        "membership_number": current_user.membership_number,
++        "profile_details": current_user.profile_details or {},
++    }
++
++
++
+ # --------------------------------------------------
+ 
+ # ADMIN TEST
+ 
+--- a/potter-community-platform/frontend/src/App.jsx
++++ b/potter-community-platform/frontend/src/App.jsx
+@@ -7296,8 +7296,11 @@
+ 
+ function ProfilePage() {
+   const [profile, setProfile] = useState(getStoredProfile);
+   const [editing, setEditing] = useState(false);
++  const [profileLoading, setProfileLoading] = useState(true);
++  const [profileSaving, setProfileSaving] = useState(false);
++  const [profileLoadError, setProfileLoadError] = useState("");
+   const [saved, setSaved] = useState(false);
+   const [memberCardActionsOpen, setMemberCardActionsOpen] = useState(false);
+   const [memberCardPreviewOpen, setMemberCardPreviewOpen] = useState(false);
+   const [photoEditorOpen, setPhotoEditorOpen] = useState(false);
+@@ -7307,8 +7310,40 @@
+     const stored = Number(getStoredProfile().photoZoom || 1);
+     return Math.min(2.5, Math.max(1, stored));
+   });
+ 
++  useEffect(() => {
++    let cancelled = false;
++    const loadProfileFromBackend = async () => {
++      setProfileLoading(true);
++      setProfileLoadError("");
++      try {
++        const user = await authApi("/auth/me");
++        if (cancelled) return;
++        const merged = {
++          ...getStoredProfile(),
++          ...(user.profile_details || {}),
++          fullName: user.full_name ?? getStoredProfile().fullName,
++          email: user.email ?? (user.profile_details || {}).email ?? "",
++          phone: user.phone_number ?? (user.profile_details || {}).phone ?? "",
++          membershipStatus: user.membership_status ?? "PENDING",
++          membershipId: user.membership_number ?? "",
++          role: user.role ?? "",
++        };
++        localStorage.setItem("potterProfile", JSON.stringify(merged));
++        setProfile(merged);
++        setPhotoZoom(Math.min(2.5, Math.max(1, Number(merged.photoZoom || 1))));
++        window.dispatchEvent(new Event("potter-profile-updated"));
++      } catch (error) {
++        if (!cancelled) setProfileLoadError(error.message || "Could not load your profile from the server.");
++      } finally {
++        if (!cancelled) setProfileLoading(false);
++      }
++    };
++    loadProfileFromBackend();
++    return () => { cancelled = true; };
++  }, []);
++
+   const updateField = (field, value) => {
+     setProfile((current) => ({
+       ...current,
+       [field]: value,
+@@ -7346,41 +7381,56 @@
+     reader.readAsDataURL(file);
+     e.target.value = "";
+   };
+ 
+-  const savePhotoDraft = () => {
++  const savePhotoDraft = async () => {
+     const nextProfile = {
+       ...profile,
+       profilePhoto: photoDraft,
+       photoZoom: photoDraft ? photoDraftZoom : 1,
+     };
+-    setProfile(nextProfile);
+-    setPhotoZoom(photoDraft ? photoDraftZoom : 1);
+-    localStorage.setItem("potterProfile", JSON.stringify(nextProfile));
+-    window.dispatchEvent(new Event("potter-profile-updated"));
+-    setPhotoEditorOpen(false);
+-    setSaved(true);
+-    window.setTimeout(() => setSaved(false), 2500);
+-  };
+-
+-
+-
+-  const saveProfile = (e) => {
++    setProfileSaving(true);
++    setProfileLoadError("");
++    try {
++      await authApi("/auth/me/profile", {
++        method: "PATCH",
++        body: JSON.stringify({ profile_details: nextProfile }),
++      });
++      setProfile(nextProfile);
++      setPhotoZoom(photoDraft ? photoDraftZoom : 1);
++      localStorage.setItem("potterProfile", JSON.stringify(nextProfile));
++      window.dispatchEvent(new Event("potter-profile-updated"));
++      setPhotoEditorOpen(false);
++      setSaved(true);
++      window.setTimeout(() => setSaved(false), 2500);
++    } catch (error) {
++      setProfileLoadError(error.message || "Could not save your profile photo to the server.");
++    } finally {
++      setProfileSaving(false);
++    }
++  };
++
++
++
++  const saveProfile = async (e) => {
+     e.preventDefault();
+-
+-    localStorage.setItem(
+-      "potterProfile",
+-      JSON.stringify(profile)
+-    );
+-
+-    window.dispatchEvent(new Event("potter-profile-updated"));
+-
+-    setEditing(false);
+-    setSaved(true);
+-
+-    window.setTimeout(() => {
+-      setSaved(false);
+-    }, 3000);
++    setProfileSaving(true);
++    setProfileLoadError("");
++    try {
++      await authApi("/auth/me/profile", {
++        method: "PATCH",
++        body: JSON.stringify({ profile_details: profile }),
++      });
++      localStorage.setItem("potterProfile", JSON.stringify(profile));
++      window.dispatchEvent(new Event("potter-profile-updated"));
++      setEditing(false);
++      setSaved(true);
++      window.setTimeout(() => setSaved(false), 3000);
++    } catch (error) {
++      setProfileLoadError(error.message || "Could not save your profile to the server.");
++    } finally {
++      setProfileSaving(false);
++    }
+   };
+ 
+   const initials = profile.fullName
+     ? profile.fullName
+@@ -7499,8 +7549,10 @@
+           className="profile-edit-panel"
+           onSubmit={saveProfile}
+           style={{ width: "100%", maxWidth: "100%", minWidth: 0, boxSizing: "border-box", overflow: "hidden" }}
+         >
++          {profileLoadError && <div role="alert" style={{ marginBottom: 14, color: "#9f2d20", background: "#fff0ed", border: "1px solid #f2c2b8", borderRadius: 10, padding: 12 }}>{profileLoadError}</div>}
++          {profileLoading && <p role="status">Loading your saved profile from the server…</p>}
+           <div className="profile-edit-photo-section" style={{ display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap", width: "100%", minWidth: 0, boxSizing: "border-box" }}>
+             <div className="profile-avatar-large profile-edit-avatar" style={{ width: 76, height: 76, minWidth: 76, flex: "0 0 76px", borderRadius: "50%", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", position: "relative", boxSizing: "border-box" }}>
+               {profile.profilePhoto ? (
+                 <img src={profile.profilePhoto} alt="Profile" style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "center", transform: `scale(${photoZoom})`, display: "block" }} />
+@@ -7787,11 +7839,12 @@
+ 
+             <button
+               type="submit"
+               className="btn btn-primary"
++              disabled={profileSaving || profileLoading}
+             >
+-              Save Profile
+-              <CheckCircle size={17} />
++              {profileSaving ? "Saving…" : "Save Profile"}
++              {!profileSaving && <CheckCircle size={17} />}
+             </button>
+           </div>
+         </form>
+ 

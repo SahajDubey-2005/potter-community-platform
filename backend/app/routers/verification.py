@@ -45,6 +45,20 @@ def upload_verification_document(
     return verification
 
 
+@router.get("/mine", response_model=list[VerificationResponse])
+def list_my_verification_documents(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return only the signed-in member's persisted document review records."""
+    return (
+        db.query(Verification)
+        .filter(Verification.user_id == current_user.id)
+        .order_by(Verification.id.desc())
+        .all()
+    )
+
+
 @router.get("/{verification_id}/file")
 def download_verification_document(
     verification_id: int,

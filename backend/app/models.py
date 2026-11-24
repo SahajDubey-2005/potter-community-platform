@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Date, Numeric, ForeignKey, JSON, Text
+from sqlalchemy import Column, Integer, BigInteger, String, Boolean, DateTime, Date, Numeric, ForeignKey, JSON, Text, UniqueConstraint
 from datetime import date, datetime
 import enum
 
@@ -106,6 +106,12 @@ class User(Base):
     )
 
     application_details: Mapped[dict | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+
+    # Member-editable profile information; separate from membership application data.
+    profile_details: Mapped[dict | None] = mapped_column(
         JSON,
         nullable=True,
     )
@@ -301,6 +307,26 @@ class Verification(Base):
     )
 
 
+
+class Announcement(Base):
+    """Published or draft community notice, with visibility and expiry controls."""
+    __tablename__ = "announcements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    title: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str] = mapped_column(String(5000), nullable=False)
+    category: Mapped[str] = mapped_column(String(40), nullable=False, default="General")
+    audience: Mapped[str] = mapped_column(String(32), nullable=False, default="ALL", index=True)
+    is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="DRAFT", index=True)
+    created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+
 class Notification(Base):
     __tablename__ = "notifications"
 
@@ -460,6 +486,103 @@ class MarketplaceOrder(Base):
     items: Mapped[list[dict]] = mapped_column(JSON, nullable=False)
     total_amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     status: Mapped[str] = mapped_column(String(24), default="REQUESTED", nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    tracking_number: Mapped[str | None] = mapped_column(String(48), unique=True, nullable=True, index=True)
+    tracking_access_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    payment_status: Mapped[str] = mapped_column(String(24), default="UNPAID", nullable=False)
+    payment_reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MarketplacePayment(Base):
+    """A distinct Razorpay order for one marketplace checkout attempt."""
+    __tablename__ = "marketplace_payments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    marketplace_order_id: Mapped[int] = mapped_column(ForeignKey("marketplace_orders.id"), nullable=False, index=True)
+    razorpay_order_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    razorpay_payment_id: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True)
+    amount_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="INR", nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="CREATED", nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MarketplacePaymentRefund(Base):
+    """Provider-confirmed refunds, including refunds initiated from Razorpay Dashboard."""
+    __tablename__ = "marketplace_payment_refunds"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    marketplace_payment_id: Mapped[int] = mapped_column(ForeignKey("marketplace_payments.id"), nullable=False, index=True)
+    razorpay_refund_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    amount_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
+class MarketplacePaymentWebhook(Base):
+    """Prevents processing the same Razorpay webhook twice."""
+    __tablename__ = "marketplace_payment_webhooks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    event_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
+class MarketplaceSellerPickup(Base):
+    """Admin-approved Shiprocket pickup address name per marketplace seller."""
+    __tablename__ = "marketplace_seller_pickups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    seller_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, unique=True, index=True)
+    pickup_location: Mapped[str] = mapped_column(String(160), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
+class MarketplaceCourierShipment(Base):
+    """Shiprocket fulfillment is per marketplace product, not per mixed-seller order."""
+    __tablename__ = "marketplace_courier_shipments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    marketplace_order_id: Mapped[int] = mapped_column(ForeignKey("marketplace_orders.id"), nullable=False, index=True)
+    product_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    seller_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    reference: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    pickup_location: Mapped[str] = mapped_column(String(160), nullable=False)
+    destination_address: Mapped[str] = mapped_column(String(250), nullable=False)
+    destination_city: Mapped[str] = mapped_column(String(120), nullable=False)
+    destination_state: Mapped[str] = mapped_column(String(120), nullable=False)
+    destination_pincode: Mapped[str] = mapped_column(String(6), nullable=False)
+    recipient_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    weight_kg: Mapped[float] = mapped_column(Numeric(9, 3), nullable=False)
+    length_cm: Mapped[float] = mapped_column(Numeric(9, 2), nullable=False)
+    breadth_cm: Mapped[float] = mapped_column(Numeric(9, 2), nullable=False)
+    height_cm: Mapped[float] = mapped_column(Numeric(9, 2), nullable=False)
+    shiprocket_order_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    shiprocket_shipment_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, unique=True)
+    awb_code: Mapped[str | None] = mapped_column(String(120), nullable=True, unique=True, index=True)
+    courier_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="CREATING")
+    pickup_status: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    courier_status: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+
+class MarketplaceCourierWebhook(Base):
+    """Idempotent Shiprocket webhook processing without storing customer data."""
+    __tablename__ = "marketplace_courier_webhooks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    payload_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
 
 
@@ -641,3 +764,42 @@ class MatrimonialProfile(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reviewed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+
+class MatrimonialShortlist(Base):
+    """Private shortlist entries, scoped to a verified adult member."""
+    __tablename__ = "matrimonial_shortlists"
+    __table_args__ = (
+        UniqueConstraint("user_id", "profile_id", name="uq_matrimonial_shortlist_user_profile"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("matrimonial_profiles.id", ondelete="CASCADE"), index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class GovernmentSchemeRequest(Base):
+    """Internal Potter Community help request; never an official government filing."""
+    __tablename__ = "government_scheme_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    scheme_id: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
+    scheme_title: Mapped[str] = mapped_column(String(180), nullable=False)
+    details: Mapped[dict] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="PENDING", index=True, nullable=False)
+    review_remark: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    reviewed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+
+class GovernmentSchemeRequestDocument(Base):
+    __tablename__ = "government_scheme_request_documents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    application_id: Mapped[int] = mapped_column(ForeignKey("government_scheme_requests.id", ondelete="CASCADE"), index=True, nullable=False)
+    original_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    stored_name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)

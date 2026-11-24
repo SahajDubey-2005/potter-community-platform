@@ -4,10 +4,11 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.auth import get_current_user, user_has_any_permission
 from app.database import get_db
-from app.models import MatrimonialProfile, User
+from app.models import MatrimonialProfile, MatrimonialShortlist, User
 
 router = APIRouter(prefix="/matrimonial", tags=["Matrimonial"])
 
@@ -131,3 +132,69 @@ def decide_profile(profile_id: int, data: DecisionInput, current_user: User = De
     db.commit()
     owner = db.query(User).filter_by(id=profile.user_id).first()
     return _serialize(profile, owner)
+
+
+@router.get("/shortlist")
+def my_shortlisted_profiles(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return saved public-profile IDs to the member who saved them."""
+    _member(current_user)
+    records = (
+        db.query(MatrimonialShortlist.profile_id)
+        .join(MatrimonialProfile, MatrimonialProfile.id == MatrimonialShortlist.profile_id)
+        .filter(
+            MatrimonialShortlist.user_id == current_user.id,
+            MatrimonialProfile.status == "PUBLISHED",
+        )
+        .all()
+    )
+    return [profile_id for (profile_id,) in records]
+
+
+@router.post("/shortlist/{profile_id}", status_code=201)
+def save_shortlisted_profile(
+    profile_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _member(current_user)
+    profile = db.query(MatrimonialProfile).filter(
+        MatrimonialProfile.id == profile_id,
+        MatrimonialProfile.status == "PUBLISHED",
+        MatrimonialProfile.user_id != current_user.id,
+    ).first()
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Published matrimonial profile not found")
+    existing = db.query(MatrimonialShortlist).filter_by(
+        user_id=current_user.id, profile_id=profile_id,
+    ).first()
+    if existing is None:
+        db.add(MatrimonialShortlist(
+            user_id=current_user.id,
+            profile_id=profile_id,
+            created_at=datetime.now(timezone.utc),
+        ))
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            # Concurrent duplicate submissions do not create multiple shortlist entries.
+            if db.query(MatrimonialShortlist).filter_by(user_id=current_user.id, profile_id=profile_id).first() is None:
+                raise
+    return {"profile_id": profile_id, "shortlisted": True}
+
+
+@router.delete("/shortlist/{profile_id}")
+def remove_shortlisted_profile(
+    profile_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _member(current_user)
+    db.query(MatrimonialShortlist).filter_by(
+        user_id=current_user.id, profile_id=profile_id,
+    ).delete(synchronize_session=False)
+    db.commit()
+    return {"profile_id": profile_id, "shortlisted": False}

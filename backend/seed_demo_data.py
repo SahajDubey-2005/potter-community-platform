@@ -11,7 +11,6 @@ Run from the backend directory:
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-import shutil
 
 from app.database import SessionLocal
 from app.models import (
@@ -21,24 +20,7 @@ from app.models import (
 )
 
 BASE_DIR = Path(__file__).resolve().parent
-IMAGE_SOURCE = BASE_DIR / "demo_images"
-IMAGE_DEST = BASE_DIR / "uploads" / "marketplace"
 NOW = datetime.now(timezone.utc)
-
-PRODUCTS = [
-    ("DEMO - Handcrafted Terracotta Water Pot", "Traditional handmade terracotta water pot for home use.", "Utility Pottery", 450, "water_pot.jpg"),
-    ("DEMO - Decorative Clay Vase", "Hand-shaped clay vase with a natural earthy finish.", "Home Decor", 650, "clay_vase.jpg"),
-    ("DEMO - Traditional Earthen Diyas Set", "Handcrafted clay diyas for festive decoration.", "Festive Items", 180, "diyas.jpg"),
-    ("DEMO - Ceramic Serving Bowl", "Hand-finished serving bowl for everyday dining.", "Tableware", 320, "serving_bowl.jpg"),
-    ("DEMO - Terracotta Planter", "Breathable clay planter for indoor and balcony plants.", "Garden Pottery", 280, "planter.jpg"),
-    ("DEMO - Handmade Kulhad Set", "Traditional clay cups supplied as a set.", "Tableware", 240, "kulhad.jpg"),
-    ("DEMO - Decorative Clay Wall Plate", "Decorative plate with a traditional clay-art finish.", "Home Decor", 550, "wall_plate.jpg"),
-    ("DEMO - Earthen Storage Jar", "Classic earthen storage jar with a fitted lid.", "Utility Pottery", 700, "storage_jar.jpg"),
-    ("DEMO - Clay Incense Holder", "Simple handmade incense holder with an earthy finish.", "Home Decor", 150, "incense_holder.jpg"),
-    ("DEMO - Terracotta Tea Cup Set", "A set of handmade terracotta tea cups.", "Tableware", 220, "tea_cup_set.jpg"),
-    ("DEMO - Garden Pot Set", "Decorative clay pots for home and garden plants.", "Garden Pottery", 480, "garden_pot.jpg"),
-    ("DEMO - Decorative Pottery Showpiece", "Handcrafted pottery showpiece for interior decoration.", "Art Pieces", 360, "decorative_showpiece.jpg"),
-]
 
 RECORDS = [
     ("NOTICE", "DEMO - Potter Community Monthly Meeting", "Sample notice: the monthly community meeting will discuss activities, member support and marketplace improvements."),
@@ -91,21 +73,6 @@ def choose_admin(users):
     return users[0]
 
 
-def copy_product_images():
-    IMAGE_DEST.mkdir(parents=True, exist_ok=True)
-    copied = 0
-    for *_, filename in PRODUCTS:
-        source = IMAGE_SOURCE / filename
-        target = IMAGE_DEST / filename
-        if source.is_file():
-            if not target.exists():
-                shutil.copy2(source, target)
-            copied += 1
-        else:
-            print(f"WARNING: product image missing: {source}")
-    return copied
-
-
 def add_records(db, admin):
     added = 0
     for kind, title, content in RECORDS:
@@ -134,23 +101,6 @@ def add_events(db, admin):
                 registration_enabled=True, status="PUBLISHED",
                 created_by_id=admin.id, approved_by_id=admin.id,
                 approval_remark="DEMO DATA - not an official event",
-                created_at=NOW, updated_at=NOW,
-            ))
-            added += 1
-    return added
-
-
-def add_products(db, users):
-    added = 0
-    for index, (name, description, category, price, filename) in enumerate(PRODUCTS):
-        found = db.query(MarketplaceProduct.id).filter(MarketplaceProduct.name == name).first()
-        if not found:
-            seller = users[index % len(users)]
-            image_url = f"/uploads/marketplace/{filename}" if (IMAGE_DEST / filename).is_file() else None
-            db.add(MarketplaceProduct(
-                seller_id=seller.id, name=name, description=description,
-                category=category, price=Decimal(str(price)),
-                image_url=image_url, is_active=True,
                 created_at=NOW, updated_at=NOW,
             ))
             added += 1
@@ -264,11 +214,9 @@ def main():
         if not users:
             raise RuntimeError("No active, approved accounts found. No demo data was added.")
         admin = choose_admin(users)
-        image_count = copy_product_images()
         counts = {
             "community announcements/meetings/minutes": add_records(db, admin),
             "events": add_events(db, admin),
-            "marketplace products": add_products(db, users),
             "demo schemes/scholarships": add_schemes(db, admin),
             "notifications across existing users": add_notifications(db, users),
             "demo committee assignments": add_committee_demo_assignments(db, users, admin),
@@ -277,7 +225,6 @@ def main():
         db.commit()
         print("\nDEMO SEED COMPLETED")
         print(f"Existing active, approved accounts used: {len(users)}")
-        print(f"Product image files available: {image_count}/{len(PRODUCTS)}")
         for label, count in counts.items():
             print(f"New {label}: {count}")
         print("\nNo user accounts were created, deleted, or modified.")

@@ -1,4 +1,7 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+import hashlib
+import hmac
+import secrets
 from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
@@ -76,13 +79,42 @@ def _product_out(product: MarketplaceProduct, seller_name: str, can_manage: bool
 
 
 def _order_out(order: MarketplaceOrder) -> dict:
+    # A single checkout may contain items from multiple independent sellers.
+    # Keep each product's own status and location history in its JSON snapshot.
     return {
         "id": order.id,
+        "tracking_number": order.tracking_number or f"PCP-LEGACY-{order.id}",
         "items": order.items,
         "total_amount": float(order.total_amount),
         "status": order.status,
         "created_at": order.created_at.isoformat(),
+        "delivery_address": order.delivery_address or "",
+        "payment_status": order.payment_status or "UNPAID",
+        "payment_reference": order.payment_reference,
+        "paid_at": order.paid_at.isoformat() if order.paid_at else None,
     }
+
+
+def _is_marketplace_admin(user: User, db: Session) -> bool:
+    role_name = user.role_record.name if user.role_record else user.role
+    return _can_manage(user, db) and str(role_name or "").upper() in {"ADMIN", "SUPER ADMIN"}
+
+
+def _update_combined_status(order: MarketplaceOrder, items: list[dict]) -> None:
+    # Preserve the existing summary priority and per-seller split-order behavior.
+    statuses = [item.get("status", order.status or "REQUESTED") for item in items]
+    if all(value == "DELIVERED" for value in statuses):
+        order.status = "DELIVERED"
+    elif all(value == "CANCELLED" for value in statuses):
+        order.status = "CANCELLED"
+    elif any(value == "SHIPPED" for value in statuses):
+        order.status = "SHIPPED"
+    elif any(value == "PROCESSING" for value in statuses):
+        order.status = "PROCESSING"
+    elif any(value == "ACCEPTED" for value in statuses):
+        order.status = "ACCEPTED"
+    else:
+        order.status = "REQUESTED"
 
 
 @router.post("/upload-image")
@@ -100,6 +132,16 @@ async def upload_product_image(
         raise HTTPException(status_code=400, detail="The selected image is empty")
     if len(content) > MAX_MARKETPLACE_IMAGE_BYTES:
         raise HTTPException(status_code=413, detail="Image must be 5 MB or smaller")
+    # The browser-provided Content-Type is not trustworthy. Match it to the
+    # actual file signature so HTML/SVG or other active files cannot be served
+    # back from the public marketplace image directory.
+    is_supported_image = {
+        "image/jpeg": content.startswith(b"\xff\xd8\xff"),
+        "image/png": content.startswith(b"\x89PNG\r\n\x1a\n"),
+        "image/webp": len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP",
+    }.get(file.content_type or "", False)
+    if not is_supported_image:
+        raise HTTPException(status_code=415, detail="The uploaded file does not match its JPG, PNG, or WEBP type")
     filename = f"{uuid4().hex}{extension}"
     destination = MARKETPLACE_UPLOAD_DIR / filename
     destination.write_bytes(content)
@@ -188,13 +230,17 @@ def place_order(data: OrderInput, current_user: User | None = Depends(optional_c
     if len(products) != len(quantities):
         raise HTTPException(status_code=400, detail="One or more cart items are no longer available. Refresh the marketplace and try again.")
     item_snapshot = []
+    now = datetime.now(timezone.utc)
     total = Decimal("0.00")
     for product in products:
         quantity = quantities[product.id]
         price = Decimal(product.price)
         total += price * quantity
-        item_snapshot.append({"product_id": product.id, "name": product.name, "quantity": quantity, "unit_price": float(price), "seller_id": product.seller_id, "status": "REQUESTED", "status_history": [{"status": "REQUESTED", "at": datetime.now(timezone.utc).isoformat()}]})
+        item_snapshot.append({"product_id": product.id, "name": product.name, "quantity": quantity, "unit_price": float(price), "seller_id": product.seller_id, "status": "REQUESTED", "status_history": [{"status": "REQUESTED", "at": now.isoformat()}], "tracking_events": [{"status": "REQUESTED", "description": "Order request received", "at": now.isoformat(), "location": None}]})
+    access_key = secrets.token_urlsafe(32)
     order = MarketplaceOrder(
+        tracking_number=f"PCP-{uuid4().hex[:16].upper()}",
+        tracking_access_hash=hashlib.sha256(access_key.encode("utf-8")).hexdigest(),
         user_id=current_user.id if current_user else None,
         buyer_name=data.buyer_name.strip(),
         buyer_phone=data.buyer_phone.strip(),
@@ -208,6 +254,22 @@ def place_order(data: OrderInput, current_user: User | None = Depends(optional_c
     db.add(order)
     db.commit()
     db.refresh(order)
+    # The access key is shown only after checkout; the database stores its hash.
+    return {**_order_out(order), "tracking_access_key": access_key}
+
+
+class TrackingLookupInput(BaseModel):
+    order_id: int = Field(gt=0)
+    access_key: str = Field(min_length=20, max_length=256)
+
+
+@router.post("/track")
+def track_order_by_access_key(data: TrackingLookupInput, db: Session = Depends(get_db)):
+    # Guest tracking cannot use guessable order IDs alone.
+    order = db.query(MarketplaceOrder).filter(MarketplaceOrder.id == data.order_id).first()
+    supplied_hash = hashlib.sha256(data.access_key.encode("utf-8")).hexdigest()
+    if not order or not order.tracking_access_hash or not hmac.compare_digest(order.tracking_access_hash, supplied_hash):
+        raise HTTPException(status_code=404, detail="Order not found. Check your order ID and private tracking code.")
     return _order_out(order)
 
 
@@ -215,8 +277,7 @@ def place_order(data: OrderInput, current_user: User | None = Depends(optional_c
 def list_seller_orders(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     if str(current_user.membership_status or "").upper() != "APPROVED" and not _can_manage(current_user, db):
         raise HTTPException(status_code=403, detail="Only verified sellers can view marketplace order requests")
-    role_name = current_user.role_record.name if current_user.role_record else current_user.role
-    can_manage_all = user_has_any_permission(current_user, ("marketplace.manage",), db) and str(role_name or "").upper() in {"ADMIN", "SUPER ADMIN"}
+    can_manage_all = _is_marketplace_admin(current_user, db)
     orders = db.query(MarketplaceOrder).order_by(MarketplaceOrder.created_at.desc()).limit(300).all()
     output = []
     for order in orders:
@@ -251,9 +312,10 @@ def update_order_status(
     order = db.query(MarketplaceOrder).filter(MarketplaceOrder.id == order_id).first()
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found")
+    if data.status == "CANCELLED" and order.payment_status in {"PAID", "REFUND_PENDING", "PARTIALLY_REFUNDED"}:
+        raise HTTPException(status_code=409, detail="Refund the online payment before cancelling a paid order")
 
-    role_name = current_user.role_record.name if current_user.role_record else current_user.role
-    is_admin = _can_manage(current_user, db) and str(role_name or "").upper() in {"ADMIN", "SUPER ADMIN"}
+    is_admin = _is_marketplace_admin(current_user, db)
     if not is_admin and not _is_verified_member(current_user):
         raise HTTPException(status_code=403, detail="Only verified sellers can update order status")
 
@@ -269,25 +331,103 @@ def update_order_status(
             raise HTTPException(status_code=409, detail=f"Order item is already {previous.lower()}")
         history = list(item.get("status_history") or [])
         history.append({"status": data.status, "at": now, "updated_by": current_user.id})
+        events = list(item.get("tracking_events") or [])
+        events.append({"status": data.status, "at": now, "description": "Shipment status updated by seller", "location": None, "updated_by": current_user.id})
+        item["tracking_events"] = events
         item["status"] = data.status
         item["status_history"] = history
         item["status_updated_at"] = now
 
     order.items = items
-    statuses = [item.get("status", order.status or "REQUESTED") for item in items]
-    if all(value == "DELIVERED" for value in statuses):
-        order.status = "DELIVERED"
-    elif all(value == "CANCELLED" for value in statuses):
-        order.status = "CANCELLED"
-    elif any(value == "SHIPPED" for value in statuses):
-        order.status = "SHIPPED"
-    elif any(value == "PROCESSING" for value in statuses):
-        order.status = "PROCESSING"
-    elif any(value == "ACCEPTED" for value in statuses):
-        order.status = "ACCEPTED"
-    else:
-        order.status = "REQUESTED"
+    _update_combined_status(order, items)
 
+    db.commit()
+    db.refresh(order)
+    return _order_out(order)
+
+
+class ShipmentLocationInput(BaseModel):
+    product_id: int = Field(gt=0)
+    location: str = Field(min_length=2, max_length=200)
+    description: str | None = Field(default=None, max_length=500)
+    status: str | None = Field(default=None, pattern="^(REQUESTED|ACCEPTED|PROCESSING|SHIPPED|DELIVERED|CANCELLED)$")
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    courier_name: str | None = Field(default=None, max_length=120)
+    courier_tracking_number: str | None = Field(default=None, max_length=120)
+    estimated_delivery: date | None = None
+
+
+@router.patch("/orders/{order_id}/tracking")
+def update_shipment_location(
+    order_id: int,
+    data: ShipmentLocationInput,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # Only the product's seller (or authorized marketplace administrator) can
+    # report a location. No customer-supplied updates or simulated GPS points.
+    order = db.query(MarketplaceOrder).filter(MarketplaceOrder.id == order_id).first()
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    is_admin = _is_marketplace_admin(current_user, db)
+    if not is_admin and not _is_verified_member(current_user):
+        raise HTTPException(status_code=403, detail="Only verified sellers can update shipment locations")
+    if (data.latitude is None) != (data.longitude is None):
+        raise HTTPException(status_code=422, detail="Enter both latitude and longitude, or leave both empty")
+    items = [dict(item) for item in (order.items or [])]
+    item = next((value for value in items if int(value.get("product_id", -1)) == data.product_id), None)
+    if not item:
+        raise HTTPException(status_code=404, detail="Product is not part of this order")
+    if not is_admin and int(item.get("seller_id", -1)) != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only update tracking for your own products")
+    previous = str(item.get("status") or "REQUESTED")
+    if previous in {"DELIVERED", "CANCELLED"}:
+        raise HTTPException(status_code=409, detail="This shipment is already finished")
+    next_status = data.status or previous
+    if next_status == "CANCELLED" and order.payment_status in {"PAID", "REFUND_PENDING", "PARTIALLY_REFUNDED"}:
+        raise HTTPException(status_code=409, detail="Refund the online payment before cancelling a paid order")
+    if data.status and data.status != previous:
+        valid_progress = ["REQUESTED", "ACCEPTED", "PROCESSING", "SHIPPED", "DELIVERED"]
+        if data.status != "CANCELLED" and valid_progress.index(data.status) < valid_progress.index(previous):
+            raise HTTPException(status_code=409, detail="Shipment status cannot move backwards")
+    now = datetime.now(timezone.utc).isoformat()
+    location = data.location.strip()
+    if len(location) < 2:
+        raise HTTPException(status_code=422, detail="Enter a valid shipment location")
+    entry = {
+        "status": next_status, "location": location, "at": now,
+        "description": (data.description or "Shipment location updated").strip() or "Shipment location updated",
+        "updated_by": current_user.id,
+    }
+    if data.latitude is not None:
+        entry["latitude"] = data.latitude
+        entry["longitude"] = data.longitude
+        item["latitude"] = data.latitude
+        item["longitude"] = data.longitude
+    else:
+        # Never show a previous coordinate as the location of a newer text-only scan.
+        item.pop("latitude", None)
+        item.pop("longitude", None)
+    events = list(item.get("tracking_events") or [])
+    events.append(entry)
+    item["tracking_events"] = events
+    item["current_location"] = location
+    item["location_updated_at"] = now
+    if next_status != previous:
+        history = list(item.get("status_history") or [])
+        history.append({"status": next_status, "at": now, "updated_by": current_user.id})
+        item["status_history"] = history
+        item["status_updated_at"] = now
+        item["status"] = next_status
+    if data.courier_name is not None:
+        item["courier_name"] = data.courier_name.strip() or None
+    if data.courier_tracking_number is not None:
+        item["courier_tracking_number"] = data.courier_tracking_number.strip() or None
+    if data.estimated_delivery is not None:
+        item["estimated_delivery"] = data.estimated_delivery.isoformat()
+    order.items = items
+    _update_combined_status(order, items)
     db.commit()
     db.refresh(order)
     return _order_out(order)

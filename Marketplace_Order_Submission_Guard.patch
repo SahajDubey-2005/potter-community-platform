@@ -1,0 +1,46 @@
+--- a/potter-community-platform/frontend/src/App.jsx
++++ b/potter-community-platform/frontend/src/App.jsx
+@@ -2142,6 +2142,7 @@
+   const [loadingProducts, setLoadingProducts] = useState(true);
+   const [marketNotice, setMarketNotice] = useState("");
+   const [productBusy, setProductBusy] = useState(false);
++  const [orderBusy, setOrderBusy] = useState(false);
+   const [editingProductId, setEditingProductId] = useState(null);
+   const [productDraft, setProductDraft] = useState({ name: "", description: "", category: "Home & décor", price: "", image_url: "" });
+   const [productImageFile, setProductImageFile] = useState(null);
+@@ -2240,10 +2241,17 @@
+     }
+   };
+   const placeOrder = async () => {
++    if (orderBusy) return;
++    if (cart.length === 0) {
++      setMarketNotice("Your cart is empty. Add a product before submitting an order.");
++      return;
++    }
+     if (!buyerDetails.name.trim() || buyerDetails.phone.replace(/\D/g, "").length < 10 || buyerDetails.address.trim().length < 8) {
+       setMarketNotice("Enter your name, a valid phone number, and delivery address to place the order.");
+       return;
+     }
++    setOrderBusy(true);
++    setMarketNotice("Submitting your order request...");
+     const quantities = cart.reduce((result, item) => {
+       result[item.id] = (result[item.id] || 0) + 1;
+       return result;
+@@ -2263,6 +2271,8 @@
+     } catch (error) {
+       setMarketNotice(error.message || "Could not submit your order request. Please refresh listings and retry.");
+       await loadProducts();
++    } finally {
++      setOrderBusy(false);
+     }
+   };
+   if (currentPage === "checkout") {
+@@ -2325,7 +2335,7 @@
+                   <strong className="market-line-total">₹{(Number(item.price) * item.quantity).toLocaleString("en-IN", {minimumFractionDigits:2})}</strong>
+                 </div>)}
+               </section>
+-              <aside className="market-checkout-summary"><h2>Delivery details</h2><div className="market-buyer-fields"><input required placeholder="Your name" value={buyerDetails.name} onChange={(event) => setBuyerDetails({ ...buyerDetails, name: event.target.value })}/><input required type="tel" placeholder="Phone number" value={buyerDetails.phone} onChange={(event) => setBuyerDetails({ ...buyerDetails, phone: event.target.value })}/><input type="email" placeholder="Email (optional)" value={buyerDetails.email} onChange={(event) => setBuyerDetails({ ...buyerDetails, email: event.target.value })}/><textarea required className="address" placeholder="Full delivery address" value={buyerDetails.address} onChange={(event) => setBuyerDetails({ ...buyerDetails, address: event.target.value })}/></div><div className="market-checkout-total"><span>Subtotal ({cart.length} items)</span><strong>₹{cartSubtotal.toLocaleString("en-IN", {minimumFractionDigits:2})}</strong></div><div className="market-checkout-total"><span>Delivery</span><span>To be arranged by artisan</span></div><div className="market-checkout-grand"><span>Order total</span><strong>₹{cartSubtotal.toLocaleString("en-IN", {minimumFractionDigits:2})}</strong></div><button type="button" className="btn btn-primary market-place-order" onClick={placeOrder}>Submit combined order <ArrowRight size={16}/></button><small className="market-checkout-note">One order request will be created for all items. The artisans will contact you to arrange payment and delivery.</small></aside>
++              <aside className="market-checkout-summary"><h2>Delivery details</h2><div className="market-buyer-fields"><input required placeholder="Your name" value={buyerDetails.name} onChange={(event) => setBuyerDetails({ ...buyerDetails, name: event.target.value })}/><input required type="tel" placeholder="Phone number" value={buyerDetails.phone} onChange={(event) => setBuyerDetails({ ...buyerDetails, phone: event.target.value })}/><input type="email" placeholder="Email (optional)" value={buyerDetails.email} onChange={(event) => setBuyerDetails({ ...buyerDetails, email: event.target.value })}/><textarea required className="address" placeholder="Full delivery address" value={buyerDetails.address} onChange={(event) => setBuyerDetails({ ...buyerDetails, address: event.target.value })}/></div><div className="market-checkout-total"><span>Subtotal ({cart.length} items)</span><strong>₹{cartSubtotal.toLocaleString("en-IN", {minimumFractionDigits:2})}</strong></div><div className="market-checkout-total"><span>Delivery</span><span>To be arranged by artisan</span></div><div className="market-checkout-grand"><span>Order total</span><strong>₹{cartSubtotal.toLocaleString("en-IN", {minimumFractionDigits:2})}</strong></div><button type="button" className="btn btn-primary market-place-order" onClick={placeOrder} disabled={orderBusy || cart.length === 0}>{orderBusy ? "Submitting order..." : "Submit combined order"} <ArrowRight size={16}/></button><small className="market-checkout-note">One order request will be created for all items. The artisans will contact you to arrange payment and delivery.</small></aside>
+             </div>
+           )}
+           {marketNotice && <div role="status" className="market-checkout-notice">{marketNotice}</div>}

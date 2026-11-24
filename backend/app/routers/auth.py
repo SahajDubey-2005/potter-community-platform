@@ -1979,9 +1979,64 @@ def get_my_profile(
 
         "membership_number": current_user.membership_number,
 
+        "profile_details": current_user.profile_details or {},
+
     }
 
 
+
+
+
+
+
+class ProfileDetailsUpdate(BaseModel):
+    profile_details: dict = Field(default_factory=dict)
+
+
+@router.patch("/me/profile", response_model=UserResponse)
+def update_my_profile_details(
+    payload: ProfileDetailsUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Persist editable profile details for the authenticated user only."""
+    allowed_fields = {
+        "dateOfBirth", "gender", "occupation", "artisanStatus", "specialization",
+        "address", "permanentAddress", "correspondenceAddress", "city", "state",
+        "pincode", "bloodGroup", "referralMemberName", "referralMembershipId",
+        "bio", "profilePhoto", "photoZoom", "email", "phone",
+    }
+    incoming = payload.profile_details or {}
+    cleaned = {key: value for key, value in incoming.items() if key in allowed_fields}
+
+    current_details = dict(current_user.profile_details or {})
+    current_details.update(cleaned)
+    current_user.profile_details = current_details
+
+    try:
+        db.commit()
+        db.refresh(current_user)
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not save profile details. Please try again.",
+        )
+
+    role_record = current_user.role_record
+    role_permissions = role_record.permissions or [] if role_record is not None else []
+    return {
+        "id": current_user.id,
+        "full_name": current_user.full_name,
+        "phone_number": current_user.phone_number,
+        "email": current_user.email,
+        "role": role_record.name if role_record else current_user.role,
+        "permissions": role_permissions,
+        "is_active": current_user.is_active,
+        "membership_status": current_user.membership_status,
+        "membership_number": current_user.membership_number,
+        "profile_details": current_user.profile_details or {},
+    }
 
 
 

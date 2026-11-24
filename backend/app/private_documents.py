@@ -23,6 +23,17 @@ def save_private_document(upload: UploadFile) -> str:
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="Document must be 5 MB or smaller",
         )
+    if not content:
+        raise HTTPException(status_code=400, detail="The uploaded document is empty")
+    # A filename extension is user-controlled; reject active content disguised as
+    # a PDF or image before storing it as a private verification document.
+    valid_signature = (
+        (extension == ".pdf" and content.startswith(b"%PDF-"))
+        or (extension in {".jpg", ".jpeg"} and content.startswith(b"\xff\xd8\xff"))
+        or (extension == ".png" and content.startswith(b"\x89PNG\r\n\x1a\n"))
+    )
+    if not valid_signature:
+        raise HTTPException(status_code=400, detail="Uploaded document does not match its PDF, JPG, or PNG file type")
 
     PRIVATE_DOCUMENT_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     stored_name = f"{uuid4().hex}{extension}"

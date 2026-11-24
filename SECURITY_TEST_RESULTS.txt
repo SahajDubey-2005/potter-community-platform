@@ -1,0 +1,31 @@
+test_01_module_routes_are_registered (test_security_regression.SecurityRegressionTests.test_01_module_routes_are_registered) ... ok
+test_02_protected_profile_rejects_no_token (test_security_regression.SecurityRegressionTests.test_02_protected_profile_rejects_no_token) ... ok
+test_03_jwt_profile_returns_only_account (test_security_regression.SecurityRegressionTests.test_03_jwt_profile_returns_only_account) ... ok
+test_04_dashboard_denies_ordinary_member_officer_access (test_security_regression.SecurityRegressionTests.test_04_dashboard_denies_ordinary_member_officer_access) ... ok
+test_05_memory_image_is_owner_only_not_public (test_security_regression.SecurityRegressionTests.test_05_memory_image_is_owner_only_not_public) ... ok
+test_06_public_marketplace_images_still_work (test_security_regression.SecurityRegressionTests.test_06_public_marketplace_images_still_work) ... ok
+test_07_reject_html_disguised_as_image (test_security_regression.SecurityRegressionTests.test_07_reject_html_disguised_as_image) ... ok
+test_08_reject_file_type_mismatch (test_security_regression.SecurityRegressionTests.test_08_reject_file_type_mismatch) ... ok
+test_09_reject_unauthorized_product_upload (test_security_regression.SecurityRegressionTests.test_09_reject_unauthorized_product_upload) ... ok
+test_10_cors_allows_local_dev_frontend (test_security_regression.SecurityRegressionTests.test_10_cors_allows_local_dev_frontend) ... ok
+test_11_cors_rejects_untrusted_origin (test_security_regression.SecurityRegressionTests.test_11_cors_rejects_untrusted_origin) ... ok
+test_12_other_member_notifications_are_not_exposed (test_security_regression.SecurityRegressionTests.test_12_other_member_notifications_are_not_exposed) ... ok
+test_13_member_dashboard_is_private (test_security_regression.SecurityRegressionTests.test_13_member_dashboard_is_private) ... ok
+test_14_document_download_is_owner_only (test_security_regression.SecurityRegressionTests.test_14_document_download_is_owner_only) ... ok
+test_15_regular_member_cannot_create_admin (test_security_regression.SecurityRegressionTests.test_15_regular_member_cannot_create_admin) ... ok
+test_16_regular_member_cannot_publish_announcements (test_security_regression.SecurityRegressionTests.test_16_regular_member_cannot_publish_announcements) ... ok
+test_17_regular_member_cannot_review_matrimonial_profiles (test_security_regression.SecurityRegressionTests.test_17_regular_member_cannot_review_matrimonial_profiles) ... ok
+test_18_regular_member_cannot_refund_payments (test_security_regression.SecurityRegressionTests.test_18_regular_member_cannot_refund_payments) ... ok
+test_19_regular_member_cannot_sync_all_courier_shipments (test_security_regression.SecurityRegressionTests.test_19_regular_member_cannot_sync_all_courier_shipments) ... ok
+test_20_guest_order_requires_private_tracking_code (test_security_regression.SecurityRegressionTests.test_20_guest_order_requires_private_tracking_code) ... ok
+test_21_payment_webhook_rejects_forged_signature (test_security_regression.SecurityRegressionTests.test_21_payment_webhook_rejects_forged_signature) ... ok
+test_22_large_payment_webhook_rejected_before_processing (test_security_regression.SecurityRegressionTests.test_22_large_payment_webhook_rejected_before_processing) ... ok
+test_23_public_catalog_does_not_require_authentication (test_security_regression.SecurityRegressionTests.test_23_public_catalog_does_not_require_authentication) ... ok
+test_24_normal_member_cannot_list_private_documents (test_security_regression.SecurityRegressionTests.test_24_normal_member_cannot_list_private_documents) ... ok
+test_25_public_images_get_nosniff_header (test_security_regression.SecurityRegressionTests.test_25_public_images_get_nosniff_header) ... ok
+test_26_document_upload_rejects_fake_pdf (test_security_regression.SecurityRegressionTests.test_26_document_upload_rejects_fake_pdf) ... ok
+
+----------------------------------------------------------------------
+Ran 26 tests in 0.230s
+
+OK

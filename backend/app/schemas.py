@@ -22,13 +22,14 @@ class UserCreate(BaseModel):
 class UserResponse(BaseModel):
     id: int
     full_name: str
-    phone_number: str
+    phone_number: str | None
     email: EmailStr | None = None
     role: str
     is_active: bool
     membership_status: str = "PENDING"
     membership_number: str | None = None
     permissions: list[str] = Field(default_factory=list)
+    profile_details: dict = Field(default_factory=dict)
 
     class Config:
         from_attributes = True
