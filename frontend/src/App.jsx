@@ -1,6 +1,4 @@
 import React, { useEffect, useState, useRef } from "react";
-import { firebaseAuth } from "./firebase";
-import { createUserWithEmailAndPassword, sendEmailVerification, reload, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { QRCodeSVG } from "qrcode.react";
 import ProfessionalNetworkPage from "./components/ProfessionalNetworkPage";
 import CommunityAssistant from "./components/CommunityAssistant";
@@ -1169,9 +1167,10 @@ function App() {
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
                 {[
                   ["Full name", reviewingMembership.full_name],
-                  ["Phone", reviewingMembership.phone_number],
-                  ["Email", reviewingMembership.email],
+                  ["Phone", reviewingMembership.phone_number || reviewingMembership.application_details?.unverified_phone_number],
+                  ["Email", reviewingMembership.email || reviewingMembership.application_details?.unverified_email],
                   ["Phone verification", reviewingMembership.phone_verified ? "Verified" : "Not verified"],
+                  ["Email verification", reviewingMembership.application_details?.email_verified ? "Verified" : "Not verified"],
                   ["Date of birth", reviewingMembership.application_details?.date_of_birth],
                   ["Gender", reviewingMembership.application_details?.gender],
                   ["Blood group", reviewingMembership.application_details?.blood_group],
@@ -8977,61 +8976,71 @@ function AuthModal({
   const [signupEmail, setSignupEmail] = useState("");
   const [emailVerified, setEmailVerified] = useState(false);
   const [emailVerificationSent, setEmailVerificationSent] = useState(false);
+  const [emailOtp, setEmailOtp] = useState("");
+  const [emailVerificationToken, setEmailVerificationToken] = useState("");
+  const [emailOtpStatus, setEmailOtpStatus] = useState("");
+  const [emailOtpError, setEmailOtpError] = useState("");
 
   const sendSignupEmailVerification = async () => {
-    setAuthError(""); setAuthNotice("");
-    const form = signupFormRef.current;
-    if (!form) return;
+    setAuthError("");
+    setAuthNotice("");
+    setEmailOtpStatus("");
+    setEmailOtpError("");
     const email = signupEmail.trim().toLowerCase();
-    const password = form.querySelector('[name="password"]')?.value || "";
-    const confirmation = form.querySelector('[name="confirmPassword"]')?.value || "";
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setAuthError("Enter a valid email address first."); return; }
-    if (password.length < 8 || password !== confirmation) { setAuthError("Enter matching passwords (at least 8 characters) before verifying your email."); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setEmailOtpError("Enter a valid email address first.");
+      return;
+    }
     setAuthBusy(true);
     try {
-      let user = firebaseAuth.currentUser;
-      if (user && user.email?.toLowerCase() !== email) {
-        await signOut(firebaseAuth);
-        user = null;
-      }
-      if (!user) {
-        try {
-          const result = await createUserWithEmailAndPassword(firebaseAuth, email, password);
-          user = result.user;
-        } catch (error) {
-          if (error.code !== "auth/email-already-in-use") throw error;
-          const result = await signInWithEmailAndPassword(firebaseAuth, email, password);
-          user = result.user;
-        }
-      }
-      await reload(user);
-      if (user.emailVerified) {
-        setEmailVerified(true);
-        setAuthNotice("Email address is already verified.");
-      } else {
-        await sendEmailVerification(user);
-        setEmailVerificationSent(true);
-        setEmailVerified(false);
-        setAuthNotice("Verification link sent. Open your email, verify it, then click 'I've verified my email'.");
-      }
+      const result = await authApi("/auth/request-email-otp", {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+      setEmailVerificationSent(true);
+      setEmailVerified(false);
+      setEmailVerificationToken("");
+      setEmailOtp("");
+      setEmailOtpStatus(result.message || "A 6-digit OTP was sent to your email. It expires in 5 minutes.");
     } catch (error) {
-      setAuthError(error.code === "auth/too-many-requests" ? "Too many requests. Please wait before trying again." : error.code === "auth/invalid-credential" ? "This email already has a Firebase account with a different password." : error.message || "Unable to send verification email.");
-    } finally { setAuthBusy(false); }
+      // Keep an earlier, still-valid code when an early resend is rate-limited.
+      setEmailOtpError(error.message || "Unable to send email OTP. Please try again.");
+    } finally {
+      setAuthBusy(false);
+    }
   };
 
   const checkSignupEmailVerification = async () => {
-    setAuthError(""); setAuthNotice(""); setAuthBusy(true);
+    setAuthError("");
+    setAuthNotice("");
+    setEmailOtpStatus("");
+    setEmailOtpError("");
+    const email = signupEmail.trim().toLowerCase();
+    const code = emailOtp.trim();
+    if (!emailVerificationSent || !/^\d{6}$/.test(code)) {
+      setEmailOtpError("Enter the 6-digit OTP sent to your email.");
+      return;
+    }
+    setAuthBusy(true);
     try {
-      const user = firebaseAuth.currentUser;
-      if (!user || user.email?.toLowerCase() !== signupEmail.trim().toLowerCase()) {
-        throw new Error("Email session not found. Please send the verification link again.");
+      const result = await authApi("/auth/verify-email-otp", {
+        method: "POST",
+        body: JSON.stringify({ email, otp: code }),
+      });
+      if (!result.email_verified || !result.verificationToken) {
+        throw new Error("Email verification was not confirmed by the server.");
       }
-      await reload(user);
-      if (!user.emailVerified) throw new Error("Email is not verified yet. Open the link in your inbox, then try again.");
+      setEmailVerificationToken(result.verificationToken);
       setEmailVerified(true);
-      setAuthNotice("Email address verified successfully.");
-    } catch (error) { setEmailVerified(false); setAuthError(error.message || "Email verification failed."); }
-    finally { setAuthBusy(false); }
+      setEmailOtp("");
+      setEmailOtpStatus("Email address verified successfully.");
+    } catch (error) {
+      setEmailVerified(false);
+      setEmailVerificationToken("");
+      setEmailOtpError(error.message || "Email OTP verification failed.");
+    } finally {
+      setAuthBusy(false);
+    }
   };
 
   const [phoneVerificationToken, setPhoneVerificationToken] = useState("");
@@ -9287,22 +9296,37 @@ function AuthModal({
         if (password.length < 8) throw new Error("Use a password with at least 8 characters.");
         if (!dob || Number.isNaN(dob.getTime()) || age < 18) throw new Error("Members must be at least 18 years old. Please check the date of birth.");
         if (!certificateFile) { setCertificateError("Please upload your caste/community certificate to continue."); throw new Error("Please upload your caste/community certificate to continue."); }
-        if (!signupOtpVerified || !phoneVerificationToken) throw new Error("Verify your phone number with OTP before submitting the membership request.");
-        const firebaseUser = firebaseAuth.currentUser;
-        if (!firebaseUser || firebaseUser.email?.toLowerCase() !== String(formData.get("email") || "").trim().toLowerCase()) {
-          throw new Error("Verify the email address entered in the signup form.");
+        // Only one verified contact channel is required. The other contact is optional.
+        const verifiedPhone = signupOtpVerified && Boolean(phoneVerificationToken);
+        const verifiedEmail = emailVerified && Boolean(emailVerificationToken);
+        if (!verifiedPhone && !verifiedEmail) {
+          throw new Error("Verify either your email address or phone number using OTP before submitting your membership request.");
         }
-        await reload(firebaseUser);
-        if (!firebaseUser.emailVerified) { setEmailVerified(false); throw new Error("Verify your email through the Firebase verification link before registering."); }
-        const firebaseIdToken = await firebaseUser.getIdToken(true);
-        formData.set("firebaseIdToken", firebaseIdToken);
+        if (phone && !/^[6-9]\d{9}$/.test(phone)) {
+          throw new Error("Enter a valid 10-digit Indian mobile number or leave the phone field empty.");
+        }
+        if (verifiedPhone) formData.set("phoneVerificationToken", phoneVerificationToken);
+        else formData.delete("phoneVerificationToken");
+        if (verifiedEmail) formData.set("emailVerificationToken", emailVerificationToken);
+        else formData.delete("emailVerificationToken");
 
 
         formData.set("full_name", String(formData.get("fullName") || "").trim());
-        formData.set("phone", phone.replace(/\D/g, ""));
-        formData.set("phoneVerificationToken", phoneVerificationToken);
+        if (phone) formData.set("phone", phone.replace(/\D/g, ""));
+        else formData.delete("phone");
+        if (!signupEmail.trim()) formData.delete("email");
         if (certificateFile) formData.set("certificate", certificateFile);
-        const result = await authApi("/auth/register", { method: "POST", body: formData });
+        const result = await authApi("/auth/register", { method: "POST", body: formData }).catch((error) => {
+          if (/email.*(verification|expired|token)/i.test(error.message || "")) {
+            setEmailVerified(false);
+            setEmailVerificationSent(false);
+            setEmailVerificationToken("");
+            setEmailOtp("");
+            setEmailOtpStatus("");
+            setEmailOtpError("Email verification expired. Request a fresh OTP and verify again.");
+          }
+          throw error;
+        });
         setAuthNotice(result.message || "Your account request was submitted successfully.");
         onRegistered();
       } else {
@@ -9529,13 +9553,13 @@ function AuthModal({
           {mode === "signup" ? (
             <>
               <div className="form-group">
-                <label>Email Address</label>
-                <input type="email" name="email" inputMode="email" autoComplete="email" placeholder="Enter your personal email address" required value={signupEmail} onChange={(e) => { setSignupEmail(e.target.value); setEmailVerified(false); setEmailVerificationSent(false); }} />
+                <label>Email Address <span style={{ color: "#806b5e", fontWeight: 400 }}>(verify email or phone)</span></label>
+                <input type="email" name="email" inputMode="email" autoComplete="email" placeholder="Enter your personal email address (optional if phone verified)" value={signupEmail} onChange={(e) => { setSignupEmail(e.target.value); setEmailVerified(false); setEmailVerificationSent(false); setEmailVerificationToken(""); setEmailOtp(""); setEmailOtpStatus(""); setEmailOtpError(""); }} />
               </div>
               <div className="form-group">
-                <label>Phone Number <span style={{ color: "#b45335" }}>*</span></label>
+                <label>Phone Number <span style={{ color: "#806b5e", fontWeight: 400 }}>(verify phone or email)</span></label>
                 <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
-                  <input type="tel" name="phone" value={phone} onChange={(e) => { setPhone(e.target.value.replace(/\D/g, "").slice(0, 10)); setSignupOtpVerified(false); setPhoneVerificationToken(""); setSignupOtpSent(false); setAuthError(""); }} inputMode="numeric" autoComplete="tel-national" placeholder="10-digit mobile number" pattern="[0-9]{10}" maxLength={10} required style={{ flex: 1, minWidth: 0 }} />
+                  <input type="tel" name="phone" value={phone} onChange={(e) => { setPhone(e.target.value.replace(/\D/g, "").slice(0, 10)); setSignupOtpVerified(false); setPhoneVerificationToken(""); setSignupOtpSent(false); setAuthError(""); }} inputMode="numeric" autoComplete="tel-national" placeholder="10-digit mobile number (optional if email verified)" pattern="[0-9]{10}" maxLength={10} style={{ flex: 1, minWidth: 0 }} />
                   <button type="button" onClick={sendSignupOtp} disabled={authBusy || signupOtpVerified} style={{ border: "1px solid #c47c5a", borderRadius: 8, padding: "0 11px", background: signupOtpVerified ? "#e7f5e9" : "#fff4ec", color: signupOtpVerified ? "#24733a" : "#88432f", fontSize: 11, fontWeight: 750, cursor: authBusy || signupOtpVerified ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}>{signupOtpVerified ? "Verified ✓" : authBusy ? "Sending…" : signupOtpSent ? "Resend OTP" : "Send OTP"}</button>
                 </div>
                 {signupOtpSent && !signupOtpVerified && <div style={{ display: "flex", gap: 8, marginTop: 9 }}>
@@ -9590,12 +9614,30 @@ function AuthModal({
 
           {mode === "signup" && (
             <div className="form-group" style={{ padding: 12, border: "1px solid #e4d2c2", borderRadius: 10, background: "#fffaf5" }}>
-              <label>Email Verification <span style={{ color: "#b45335" }}>*</span></label>
-              <p style={{ fontSize: 12, margin: "4px 0 10px" }}>{emailVerified ? "Email verified successfully ✓" : "Verify your email address before submitting your membership application."}</p>
+              <label>Email Verification <span style={{ color: "#806b5e", fontWeight: 400 }}>(optional if phone verified)</span></label>
+              <p style={{ fontSize: 12, margin: "4px 0 10px" }}>{emailVerified ? "Email verified successfully ✓" : "Verify either email or phone using OTP. The other contact may be entered without verification. Email codes expire in 5 minutes."}</p>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button type="button" onClick={sendSignupEmailVerification} disabled={authBusy || emailVerified} style={{ padding: "9px 12px", border: "1px solid #c47c5a", borderRadius: 8, background: "#fff4ec", color: "#88432f", cursor: "pointer" }}>{emailVerified ? "Verified ✓" : emailVerificationSent ? "Resend verification link" : "Send verification link"}</button>
-                {!emailVerified && emailVerificationSent && <button type="button" onClick={checkSignupEmailVerification} disabled={authBusy} style={{ padding: "9px 12px", border: "1px solid #c47c5a", borderRadius: 8, background: "#a9502f", color: "white", cursor: "pointer" }}>I've verified my email</button>}
+                <button type="button" onClick={sendSignupEmailVerification} disabled={authBusy || emailVerified} style={{ padding: "9px 12px", border: "1px solid #c47c5a", borderRadius: 8, background: "#fff4ec", color: "#88432f", cursor: "pointer" }}>{emailVerified ? "Verified ✓" : authBusy ? "Please wait…" : emailVerificationSent ? "Resend Email OTP" : "Send Email OTP"}</button>
               </div>
+              {!emailVerified && emailVerificationSent && (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 9 }}>
+                  <input
+                    aria-label="Email verification OTP"
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    pattern="[0-9]{6}"
+                    maxLength={6}
+                    placeholder="Enter 6-digit email OTP"
+                    value={emailOtp}
+                    onChange={(e) => setEmailOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    style={{ flex: "1 1 145px", minWidth: 0 }}
+                  />
+                  <button type="button" onClick={checkSignupEmailVerification} disabled={authBusy || emailOtp.length !== 6} style={{ padding: "9px 12px", border: "1px solid #c47c5a", borderRadius: 8, background: "#a9502f", color: "white", cursor: "pointer" }}>{authBusy ? "Checking…" : "Verify Email OTP"}</button>
+                </div>
+              )}
+              {emailOtpStatus && <p role="status" style={{ fontSize: 12, color: "#216b35", margin: "9px 0 0" }}>{emailOtpStatus}</p>}
+              {emailOtpError && <p role="alert" style={{ fontSize: 12, color: "#a1261c", margin: "9px 0 0" }}>{emailOtpError}</p>}
             </div>
           )}
 
@@ -9829,7 +9871,7 @@ function AuthModal({
 
           {mode !== "signup" && authError && <div role="alert" style={{ margin: "10px 0", padding: "10px 12px", borderRadius: 8, border: "1px solid #f0b8b2", background: "#fff2f0", color: "#a1261c", fontSize: 12, lineHeight: 1.5 }}>{authError}</div>}
           {authNotice && !(mode === "signup" && signupOtpSent) && <div role="status" style={{ margin: "10px 0", padding: "10px 12px", borderRadius: 8, border: "1px solid #c7e4cd", background: "#f0faf2", color: "#216b35", fontSize: 12, lineHeight: 1.5 }}>{authNotice}</div>}
-          <button type="submit" className="auth-submit" disabled={authBusy || (mode === "signup" && !signupOtpVerified)} style={{ opacity: authBusy || (mode === "signup" && !signupOtpVerified) ? 0.65 : 1, cursor: authBusy || (mode === "signup" && !signupOtpVerified) ? "not-allowed" : "pointer" }}>
+          <button type="submit" className="auth-submit" disabled={authBusy || (mode === "signup" && !(signupOtpVerified || emailVerified))} style={{ opacity: authBusy || (mode === "signup" && !(signupOtpVerified || emailVerified)) ? 0.65 : 1, cursor: authBusy || (mode === "signup" && !(signupOtpVerified || emailVerified)) ? "not-allowed" : "pointer" }}>
             {authBusy ? "Please wait…" : mode === "signin" ? (loginOtpStep ? "Verify OTP & Sign In" : "Continue with Password") : "Submit Membership Request"}
             {!authBusy && <ArrowRight size={17} />}
           </button>

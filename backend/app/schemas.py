@@ -3,6 +3,7 @@ from pydantic import (
     EmailStr,
     Field,
     model_validator,
+    field_validator,
 )
 
 
@@ -30,6 +31,13 @@ class UserResponse(BaseModel):
     membership_number: str | None = None
     permissions: list[str] = Field(default_factory=list)
     profile_details: dict = Field(default_factory=dict)
+
+    @field_validator("profile_details", mode="before")
+    @classmethod
+    def normalize_empty_profile_details(cls, value):
+        # New members have not saved optional profile details yet.
+        # SQLAlchemy returns None; keep the API's existing object shape.
+        return {} if value is None else value
 
     class Config:
         from_attributes = True

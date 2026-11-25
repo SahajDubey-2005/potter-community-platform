@@ -1449,16 +1449,16 @@ def register_user(
 
     full_name: str = Form(..., min_length=2, max_length=160),
 
-    phone: str = Form(...),
+    phone: str | None = Form(None),
 
-    email: str = Form(..., min_length=3, max_length=255),
+    email: str | None = Form(None, max_length=255),
 
     password: str = Form(..., min_length=8, max_length=128),
 
     confirmPassword: str = Form(..., min_length=8, max_length=128),
 
-    phoneVerificationToken: str = Form(...),
-    emailVerificationToken: str = Form(...),
+    phoneVerificationToken: str | None = Form(None),
+    emailVerificationToken: str | None = Form(None),
 
     dateOfBirth: str = Form(...),
 
@@ -1478,7 +1478,7 @@ def register_user(
 
     full_name = full_name.strip()
 
-    phone_number = normalize_phone_number(phone)
+    phone_number = normalize_phone_number(phone or "") or None
 
     permanent_address = permanentAddress.strip()
 
@@ -1502,11 +1502,12 @@ def register_user(
 
 
 
-    if not re.fullmatch(r"[6-9]\d{9}", phone_number):
+    if phone_number and not re.fullmatch(r"[6-9]\d{9}", phone_number):
 
         raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number")
 
-
+    if not phone_number and not (email or "").strip():
+        raise HTTPException(status_code=400, detail="Enter at least one contact method: email or phone")
 
     if password != confirmPassword:
 
@@ -1514,15 +1515,13 @@ def register_user(
 
 
 
-    try:
-
-        email = TypeAdapter(EmailStr).validate_python(email.strip()).lower()
-
-    except ValidationError:
-
-        raise HTTPException(status_code=400, detail="Enter a valid email address")
-
-
+    if email and email.strip():
+        try:
+            email = TypeAdapter(EmailStr).validate_python(email.strip()).lower()
+        except ValidationError:
+            raise HTTPException(status_code=400, detail="Enter a valid email address")
+    else:
+        email = None
 
     try:
 
@@ -1554,89 +1553,43 @@ def register_user(
 
 
 
-    # Verify the short-lived signup phone verification token
+    # An applicant must prove control of at least one supplied contact method.
+    # Never trust a frontend "verified" flag: validate signed, purpose-bound tokens.
+    verified_phone = False
+    verified_email = False
 
-    try:
+    if phoneVerificationToken:
+        if not phone_number:
+            raise HTTPException(status_code=400, detail="A phone verification token requires a phone number")
+        try:
+            payload = jwt.decode(phoneVerificationToken, SECRET_KEY, algorithms=[ALGORITHM])
+            if payload.get("sub") != f"signup:{phone_number}" or payload.get("purpose") != "signup_phone_verification":
+                raise HTTPException(status_code=400, detail="Phone verification does not match the submitted phone number")
+            verified_phone = True
+        except HTTPException:
+            raise
+        except (JWTError, ValueError):
+            raise HTTPException(status_code=400, detail="Phone verification expired. Please verify again.")
 
-        payload = jwt.decode(
+    if emailVerificationToken:
+        if not email:
+            raise HTTPException(status_code=400, detail="An email verification token requires an email address")
+        try:
+            email_payload = jwt.decode(emailVerificationToken, SECRET_KEY, algorithms=[ALGORITHM])
+            if email_payload.get("sub") != f"email:{email}" or email_payload.get("purpose") != "signup_email_verification":
+                raise HTTPException(status_code=400, detail="Email verification does not match the submitted email address")
+            verified_email = True
+        except HTTPException:
+            raise
+        except (JWTError, ValueError):
+            raise HTTPException(status_code=400, detail="Email OTP verification expired. Please verify your email again.")
 
-            phoneVerificationToken,
-
-            SECRET_KEY,
-
-            algorithms=[ALGORITHM],
-
-        )
-
-
-
-        expected_sub = f"signup:{phone_number}"
-
-
-
-        if payload.get("sub") != expected_sub:
-
-            raise HTTPException(
-
-                status_code=status.HTTP_400_BAD_REQUEST,
-
-                detail="Invalid phone verification token",
-
-            )
-
-
-
-        if payload.get("purpose") != "signup_phone_verification":
-
-            raise HTTPException(
-
-                status_code=status.HTTP_400_BAD_REQUEST,
-
-                detail="Invalid verification token purpose",
-
-            )
-
-
-
-    except HTTPException:
-
-        raise
-
-    except (JWTError, ValueError):
-
-        raise HTTPException(
-
-            status_code=status.HTTP_400_BAD_REQUEST,
-
-            detail="Invalid or expired phone verification token",
-
-        )
-
-
-
-    # Validate the short-lived server-issued email OTP verification token.
-    try:
-        email_payload = jwt.decode(emailVerificationToken, SECRET_KEY, algorithms=[ALGORITHM])
-        if email_payload.get("sub") != f"email:{email}" or email_payload.get("purpose") != "signup_email_verification":
-            raise HTTPException(status_code=400, detail="Email verification does not match the submitted email address")
-    except HTTPException:
-        raise
-    except (JWTError, ValueError):
-        raise HTTPException(status_code=400, detail="Email OTP verification has expired. Please verify your email again.")
+    if not (verified_phone or verified_email):
+        raise HTTPException(status_code=400, detail="Verify either your email or phone number using OTP before registering")
 
     # Check duplicate phone
 
-    existing_phone = (
-
-        db.query(User)
-
-        .filter(User.phone_number == phone_number)
-
-        .first()
-
-    )
-
-
+    existing_phone = db.query(User).filter(User.phone_number == phone_number).first() if phone_number else None
 
     if existing_phone:
 
@@ -1652,7 +1605,7 @@ def register_user(
 
     # Check duplicate email
 
-    existing_email = db.query(User).filter(User.email == email).first()
+    existing_email = db.query(User).filter(User.email == email).first() if email else None
 
     if existing_email:
 
@@ -1698,9 +1651,9 @@ def register_user(
 
         full_name=full_name,
 
-        phone_number=phone_number,
+        phone_number=phone_number if verified_phone else None,
 
-        email=email,
+        email=email if verified_email else None,
 
         hashed_password=get_password_hash(password),
 
@@ -1710,7 +1663,7 @@ def register_user(
 
         is_active=True,
 
-        phone_verified=True,
+        phone_verified=verified_phone,
 
         membership_status="PENDING",
 
@@ -1719,7 +1672,10 @@ def register_user(
         application_details={
 
             "review_stage": "ADMIN_REVIEW",
-            "email_verified": True,
+            "email_verified": verified_email,
+            "signup_contact_policy": "either_otp_v1",
+            "unverified_email": email if email and not verified_email else None,
+            "unverified_phone_number": phone_number if phone_number and not verified_phone else None,
 
             "date_of_birth": birth_date.isoformat(),
 
@@ -1881,17 +1837,19 @@ def login_user(
 
 
 
-    if not user.phone_verified:
-
-        raise HTTPException(
-
-            status_code=status.HTTP_403_FORBIDDEN,
-
-            detail="Please verify your phone number before logging in",
-
-        )
-
-
+    account_details = user.application_details or {}
+    if account_details.get("signup_contact_policy") == "either_otp_v1":
+        # For new registrations, only verified identifiers may be used for login.
+        email_is_verified = bool(account_details.get("email_verified"))
+        if not (user.phone_verified or email_is_verified):
+            raise HTTPException(status_code=403, detail="Verify your email or phone number before logging in")
+        if "@" in credentials.identifier and not email_is_verified:
+            raise HTTPException(status_code=401, detail="Invalid credentials", headers={"WWW-Authenticate": "Bearer"})
+        if "@" not in credentials.identifier and not user.phone_verified:
+            raise HTTPException(status_code=401, detail="Invalid credentials", headers={"WWW-Authenticate": "Bearer"})
+    elif not user.phone_verified:
+        # Preserve original login requirements for pre-existing accounts.
+        raise HTTPException(status_code=403, detail="Please verify your phone number before logging in")
 
     access_token = create_access_token(
 
